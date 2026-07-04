@@ -62,6 +62,7 @@ class HealthResponse(BaseModel):
 
 class AgentChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
+    conversation_id: str | None = None
 
 
 class AgentMediaAdded(BaseModel):
@@ -179,3 +180,37 @@ class TrainingFileContent(BaseModel):
 
 class TrainingSaveRequest(BaseModel):
     content: str = ""
+
+
+class ConversationMeta(BaseModel):
+    id: str
+    title: str
+    updated_at: str | None = None
+
+
+class ConversationsResponse(BaseModel):
+    conversations: list[ConversationMeta]
+
+
+class StoredMessage(BaseModel):
+    role: str
+    content: str
+    action: str | None = None
+    results: list[SearchResult] | None = None
+    added: AgentMediaAdded | None = None
+    created_at: str | None = None
+
+
+class ConversationDetail(BaseModel):
+    id: str
+    title: str
+    messages: list[StoredMessage]
+
+
+class ConfigResponse(BaseModel):
+    values: dict[str, str]
+    secrets: dict[str, str | None]
+
+
+class ConfigUpdateRequest(BaseModel):
+    values: dict[str, str]

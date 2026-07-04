@@ -1,8 +1,33 @@
-import { useState, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import AppShell from "../components/AppShell";
 import type { AppSettings } from "../types";
 import { DEFAULT_SETTINGS, SETTINGS_KEY } from "../types";
+import { api, ApiError } from "../utils/api";
 import { logger } from "../utils/logger";
+
+// Frontend mező ↔ backend config kulcs megfeleltetés. Ezek mentéskor a
+// szerverre kerülnek (/api/config) és azonnal érvénybe lépnek.
+const CONFIG_FIELD_MAP: Array<{ field: keyof AppSettings; key: string; secret: boolean }> = [
+  { field: "sonarrUrl", key: "sonarr_url", secret: false },
+  { field: "sonarrApiKey", key: "sonarr_api_key", secret: true },
+  { field: "radarrUrl", key: "radarr_url", secret: false },
+  { field: "radarrApiKey", key: "radarr_api_key", secret: true },
+  { field: "ollamaUrl", key: "ollama_base_url", secret: false },
+  { field: "ollamaModel", key: "ollama_model", secret: false },
+  { field: "tmdbApiKey", key: "tmdb_api_key", secret: true },
+  { field: "torrentUrl", key: "qbittorrent_url", secret: false },
+  { field: "torrentUsername", key: "qbittorrent_username", secret: false },
+  { field: "torrentPassword", key: "qbittorrent_password", secret: true },
+  { field: "plexUrl", key: "plex_url", secret: false },
+  { field: "plexToken", key: "plex_token", secret: true },
+  { field: "jellyfinUrl", key: "jellyfin_url", secret: false },
+  { field: "jellyfinApiKey", key: "jellyfin_api_key", secret: true },
+];
+
+interface ConfigView {
+  values: Record<string, string>;
+  secrets: Record<string, string | null>;
+}
 
 type ConnectionState = "online" | "offline" | "checking" | "unconfigured" | "disabled";
 
@@ -370,20 +395,80 @@ const HEALTH_TESTABLE: Partial<Record<ServiceKey, string>> = {
 export default function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [serverSecrets, setServerSecrets] = useState<Record<string, string | null>>({});
   const [results, setResults] = useState<Record<string, ServiceTestResult>>(() =>
     Object.fromEntries(ALL_SERVICE_KEYS.map((k) => [k, { state: "unconfigured" as ConnectionState }]))
   );
   const [testing, setTesting] = useState<Record<string, boolean>>({});
+
+  // A szerver effektív konfigurációjának betöltése — a nem-titkos mezők
+  // értéke bekerül az űrlapba, a titkosaknál a placeholder mutatja, hogy be vannak állítva.
+  useEffect(() => {
+    let cancelled = false;
+    api<ConfigView>("/api/config")
+      .then((cfg) => {
+        if (cancelled) return;
+        setServerSecrets(cfg.secrets);
+        setSettings((prev) => {
+          const next: Record<string, unknown> = { ...prev };
+          for (const { field, key, secret } of CONFIG_FIELD_MAP) {
+            if (!secret && cfg.values[key] !== undefined) next[field] = cfg.values[key];
+          }
+          return next as unknown as AppSettings;
+        });
+      })
+      .catch(() => { /* backend nélkül a localStorage értékek maradnak */ });
+    return () => { cancelled = true; };
+  }, []);
 
   function update<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
     setSettings((prev) => ({ ...prev, [key]: value }));
     setSaved(false);
   }
 
-  function save() {
+  function secretPlaceholder(configKey: string, fallback: string): string {
+    const mask = serverSecrets[configKey];
+    return mask ? `beállítva (${mask}) — új értékhez írd felül` : fallback;
+  }
+
+  async function save() {
+    setSaveError("");
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-    setSaved(true);
-    logger.success("settings", "Beállítások mentve");
+
+    const values: Record<string, string> = {};
+    for (const { field, key, secret } of CONFIG_FIELD_MAP) {
+      const value = settings[field];
+      if (typeof value !== "string") continue;
+      if (secret) {
+        // Titkos mezőt csak akkor küldünk, ha a user új értéket írt be —
+        // az üres input jelentése: "marad a jelenlegi".
+        if (value.trim()) values[key] = value.trim();
+      } else {
+        values[key] = value.trim();
+      }
+    }
+
+    try {
+      const cfg = await api<ConfigView>("/api/config", {
+        method: "PUT",
+        body: JSON.stringify({ values }),
+      });
+      setServerSecrets(cfg.secrets);
+      // A beírt titkok mentés után kikerülnek az inputból (a maszk jelzi őket)
+      setSettings((prev) => {
+        const next: Record<string, unknown> = { ...prev };
+        for (const { field, secret } of CONFIG_FIELD_MAP) {
+          if (secret) next[field] = "";
+        }
+        return next as unknown as AppSettings;
+      });
+      setSaved(true);
+      logger.success("settings", "Beállítások mentve a szerverre");
+    } catch (err) {
+      setSaveError(err instanceof ApiError ? err.message : "A szerver nem érhető el — csak a böngészőben mentve.");
+      logger.error("settings", "Szerveroldali mentés sikertelen");
+    }
     setTimeout(() => setSaved(false), 2500);
   }
 
@@ -481,14 +566,20 @@ export default function SettingsPage() {
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto" style={{ padding: 24 }}>
 
-        {/* Figyelmeztetés: a tényleges szerverkonfiguráció env-alapú */}
+        {/* Info: mely szekciók mentődnek a szerverre */}
         <div className="card mb-6" style={{ padding: "12px 16px", background: "#F5F5F5", borderColor: "#D8D8D8" }}>
           <p className="text-xs text-gray-700">
-            A szolgáltatások tényleges konfigurációja (URL-ek, API kulcsok) a backend <code style={{ fontFamily: "monospace" }}>.env</code> fájljában
-            történik — az itt megadott értékek csak ebben a böngészőben tárolódnak, és nem befolyásolják a szervert.
-            A „Kapcsolat tesztelése" gomb a backend által látott állapotot mutatja.
+            A <strong>Sonarr, Radarr, Ollama, TMDB, Torrent, Plex és Jellyfin</strong> beállítások mentéskor a
+            szerverre kerülnek és azonnal érvénybe lépnek (újraindításkor is megmaradnak, felülírják az <code style={{ fontFamily: "monospace" }}>.env</code>-et).
+            A többi szekció (Trakt, TrueNAS, Telegram, Discord) egyelőre csak ebben a böngészőben tárolódik.
           </p>
         </div>
+
+        {saveError && (
+          <div className="card mb-6" style={{ padding: "12px 16px", background: "#F5F5F5", borderColor: "#B0B0B0" }}>
+            <p className="text-xs font-medium text-gray-800">⚠ {saveError}</p>
+          </div>
+        )}
 
         {/* Health summary */}
         <div className="card mb-6" style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
@@ -522,7 +613,7 @@ export default function SettingsPage() {
               result={cardResult("plex")} onTest={() => testService("plex")} isTesting={!!testing.plex}
               startExpanded={!isConfigured("plex", settings)}>
               <Field label="Plex URL" id="plex-url" value={settings.plexUrl} onChange={(v) => update("plexUrl", v)} placeholder="http://localhost:32400" helpText="A Plex Media Server elérhetősége a hálózaton" />
-              <Field label="X-Plex-Token" id="plex-token" value={settings.plexToken} onChange={(v) => update("plexToken", v)} placeholder="xxxxxxxxxxxxxxxxxxxx" secret helpText="Plex web → ⋮ menü → Adatok megtekintése → URL-ben látható" />
+              <Field label="X-Plex-Token" id="plex-token" value={settings.plexToken} onChange={(v) => update("plexToken", v)} placeholder={secretPlaceholder("plex_token", "xxxxxxxxxxxxxxxxxxxx")} secret helpText="Plex web → ⋮ menü → Adatok megtekintése → URL-ben látható" />
             </ServiceCard>
 
             <ServiceCard title="Jellyfin" desc="Media Server — lejátszási munkamenetek" brandColor="#00a4dc"
@@ -531,7 +622,7 @@ export default function SettingsPage() {
               result={cardResult("jellyfin")} onTest={() => testService("jellyfin")} isTesting={!!testing.jellyfin}
               startExpanded={!isConfigured("jellyfin", settings)}>
               <Field label="Jellyfin URL" id="jellyfin-url" value={settings.jellyfinUrl} onChange={(v) => update("jellyfinUrl", v)} placeholder="http://localhost:8096" />
-              <Field label="API Kulcs" id="jellyfin-key" value={settings.jellyfinApiKey} onChange={(v) => update("jellyfinApiKey", v)} placeholder="abc123def456..." secret helpText="Admin irányítópult → API Kulcsok → Kulcs hozzáadása" />
+              <Field label="API Kulcs" id="jellyfin-key" value={settings.jellyfinApiKey} onChange={(v) => update("jellyfinApiKey", v)} placeholder={secretPlaceholder("jellyfin_api_key", "abc123def456...")} secret helpText="Admin irányítópult → API Kulcsok → Kulcs hozzáadása" />
             </ServiceCard>
           </div>
         </section>
@@ -549,7 +640,7 @@ export default function SettingsPage() {
               result={cardResult("sonarr")} onTest={() => testService("sonarr")} isTesting={!!testing.sonarr}
               startExpanded={!isConfigured("sonarr", settings)}>
               <Field label="Sonarr URL" id="sonarr-url" value={settings.sonarrUrl} onChange={(v) => update("sonarrUrl", v)} placeholder="http://localhost:8989" />
-              <Field label="API Kulcs" id="sonarr-key" value={settings.sonarrApiKey} onChange={(v) => update("sonarrApiKey", v)} placeholder="abc123..." secret helpText="Beállítások → Általános → Biztonság" />
+              <Field label="API Kulcs" id="sonarr-key" value={settings.sonarrApiKey} onChange={(v) => update("sonarrApiKey", v)} placeholder={secretPlaceholder("sonarr_api_key", "abc123...")} secret helpText="Beállítások → Általános → Biztonság" />
             </ServiceCard>
 
             <ServiceCard title="Radarr" desc="Filmek automatikus letöltése" brandColor="#f5c518"
@@ -558,7 +649,7 @@ export default function SettingsPage() {
               result={cardResult("radarr")} onTest={() => testService("radarr")} isTesting={!!testing.radarr}
               startExpanded={!isConfigured("radarr", settings)}>
               <Field label="Radarr URL" id="radarr-url" value={settings.radarrUrl} onChange={(v) => update("radarrUrl", v)} placeholder="http://localhost:7878" />
-              <Field label="API Kulcs" id="radarr-key" value={settings.radarrApiKey} onChange={(v) => update("radarrApiKey", v)} placeholder="abc123..." secret helpText="Beállítások → Általános → Biztonság" />
+              <Field label="API Kulcs" id="radarr-key" value={settings.radarrApiKey} onChange={(v) => update("radarrApiKey", v)} placeholder={secretPlaceholder("radarr_api_key", "abc123...")} secret helpText="Beállítások → Általános → Biztonság" />
             </ServiceCard>
 
             <ServiceCard title="Torrent kliens" desc="qBittorrent vagy Transmission" brandColor="#44cc7f"
@@ -573,7 +664,7 @@ export default function SettingsPage() {
               </div>
               <Field label="Web UI URL" id="torrent-url" value={settings.torrentUrl} onChange={(v) => update("torrentUrl", v)} placeholder="http://localhost:8080" />
               <Field label="Felhasználónév" id="torrent-user" value={settings.torrentUsername} onChange={(v) => update("torrentUsername", v)} placeholder="admin" />
-              <Field label="Jelszó" id="torrent-pass" value={settings.torrentPassword} onChange={(v) => update("torrentPassword", v)} placeholder="••••••••" secret />
+              <Field label="Jelszó" id="torrent-pass" value={settings.torrentPassword} onChange={(v) => update("torrentPassword", v)} placeholder={secretPlaceholder("qbittorrent_password", "••••••••")} secret />
             </ServiceCard>
           </div>
         </section>
@@ -599,7 +690,7 @@ export default function SettingsPage() {
               enabled={settings.tmdbEnabled} onToggle={() => update("tmdbEnabled", !settings.tmdbEnabled)}
               result={cardResult("tmdb")} onTest={() => testService("tmdb")} isTesting={!!testing.tmdb}
               startExpanded={!isConfigured("tmdb", settings)}>
-              <Field label="API Kulcs (Bearer)" id="tmdb-key" value={settings.tmdbApiKey} onChange={(v) => update("tmdbApiKey", v)} placeholder="eyJhbGci..." secret helpText="themoviedb.org → Profil → Beállítások → API" />
+              <Field label="API Kulcs (Bearer)" id="tmdb-key" value={settings.tmdbApiKey} onChange={(v) => update("tmdbApiKey", v)} placeholder={secretPlaceholder("tmdb_api_key", "eyJhbGci...")} secret helpText="themoviedb.org → Profil → Beállítások → API" />
             </ServiceCard>
 
             <ServiceCard title="Trakt" desc="Nézési előzmények szinkron" brandColor="#ed2224"

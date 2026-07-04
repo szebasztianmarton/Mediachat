@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from app.services.cache import CacheService
+from app.services.history import HistoryService
 from app.services.media_sessions import MediaSessionsService
 from app.services.qbittorrent import QbittorrentClient
 from app.services.queue import QueueService
@@ -20,6 +21,7 @@ class AppState:
     session: SessionService
     torrents: QbittorrentClient
     media: MediaSessionsService
+    history: HistoryService
 
 
 app_state: AppState | None = None

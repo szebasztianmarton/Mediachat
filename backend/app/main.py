@@ -24,6 +24,11 @@ from app.models import (
     AgentMediaAdded,
     ChatRequest,
     ChatResponse,
+    ConfigResponse,
+    ConfigUpdateRequest,
+    ConversationDetail,
+    ConversationMeta,
+    ConversationsResponse,
     FeedbackRequest,
     HealthResponse,
     JobResponse,
@@ -33,8 +38,10 @@ from app.models import (
     RecommendationResponse,
     SearchRequest,
     SearchResponse,
+    SearchResult,
     StaleActionRequest,
     StorageStatusResponse,
+    StoredMessage,
     TrainingFileContent,
     TrainingFileMeta,
     TrainingFilesResponse,
@@ -43,12 +50,17 @@ from app.models import (
     UserInfo,
     UsersResponse,
 )
+from app.services import config_store
 from app.services.cache import CacheService
+from app.services.history import HistoryService
 from app.services.media_sessions import MediaSessionsService
-from app.services.ollama import OllamaError, OllamaTimeout, OllamaUnavailable
+from app.services.ollama import OllamaClient, OllamaError, OllamaTimeout, OllamaUnavailable
 from app.services.qbittorrent import QbittorrentClient
 from app.services.queue import QueueService
+from app.services.radarr import RadarrClient
 from app.services.ratelimit import RateLimiter
+from app.services.sonarr import SonarrClient
+from app.services.tmdb import TmdbClient
 from app.services.recommendations import RecommendationService
 from app.services.search import SearchService
 from app.services.session import SessionService
@@ -84,6 +96,13 @@ def _log_bot_exception(task: asyncio.Task) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Először a DB + a mentett konfiguráció-felülírások, hogy a kliensek már
+    # az effektív beállításokkal jöjjenek létre.
+    await init_db()
+    async with SessionLocal() as db:
+        overrides = await config_store.load_overrides(db)
+    config_store.apply_to_settings(overrides)
+
     cache = CacheService()
     await cache.connect()
     search = SearchService(cache)
@@ -103,9 +122,9 @@ async def lifespan(app: FastAPI):
         session=session_service,
         torrents=QbittorrentClient(),
         media=MediaSessionsService(),
+        history=HistoryService(),
     )
 
-    await init_db()
     async with SessionLocal() as db:
         await session_service.ensure_admin(db, settings.admin_username, settings.admin_password)
     await queue.start()
@@ -415,6 +434,120 @@ async def submit_feedback(
         payload.liked,
     )
     return {"success": True}
+
+
+# ── Beszélgetés-előzmények ───────────────────────────────────────────────────
+
+
+def _stored_message(msg) -> StoredMessage:
+    results = None
+    added = None
+    if msg.payload:
+        try:
+            payload = json.loads(msg.payload)
+            if payload.get("results"):
+                results = [SearchResult(**item) for item in payload["results"]]
+            if payload.get("added"):
+                added = AgentMediaAdded(**payload["added"])
+        except (ValueError, TypeError):
+            pass
+    return StoredMessage(
+        role=msg.role,
+        content=msg.content,
+        action=msg.action,
+        results=results,
+        added=added,
+        created_at=msg.created_at.isoformat() if msg.created_at else None,
+    )
+
+
+@app.get("/api/conversations", response_model=ConversationsResponse)
+async def list_conversations(
+    session: UserSession = Depends(get_required_session),
+    db: AsyncSession = Depends(get_db),
+) -> ConversationsResponse:
+    conversations = await _state().history.list_conversations(db, session.user_id)
+    return ConversationsResponse(
+        conversations=[
+            ConversationMeta(
+                id=c.id,
+                title=c.title,
+                updated_at=c.updated_at.isoformat() if c.updated_at else None,
+            )
+            for c in conversations
+        ]
+    )
+
+
+@app.get("/api/conversations/{conversation_id}", response_model=ConversationDetail)
+async def get_conversation(
+    conversation_id: str,
+    session: UserSession = Depends(get_required_session),
+    db: AsyncSession = Depends(get_db),
+) -> ConversationDetail:
+    st = _state()
+    conversation = await st.history.get_conversation(db, session.user_id, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="A beszélgetés nem található.")
+    messages = await st.history.list_messages(db, conversation.id)
+    return ConversationDetail(
+        id=conversation.id,
+        title=conversation.title,
+        messages=[_stored_message(m) for m in messages],
+    )
+
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    session: UserSession = Depends(get_required_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, bool]:
+    deleted = await _state().history.delete_conversation(db, session.user_id, conversation_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="A beszélgetés nem található.")
+    return {"deleted": True}
+
+
+# ── Konfiguráció (admin) ─────────────────────────────────────────────────────
+
+
+def _reload_service_clients(st: AppState) -> None:
+    """A settings-ből induláskor példányosított kliensek újraépítése a friss
+    értékekkel — config mentés után hívjuk."""
+    st.search.sonarr = SonarrClient()
+    st.search.radarr = RadarrClient()
+    st.search.tmdb = TmdbClient()
+    st.search.ollama = OllamaClient()
+    st.storage.sonarr = SonarrClient()
+    st.storage.radarr = RadarrClient()
+    st.torrents = QbittorrentClient()
+    # A MediaSessionsService hívásonként olvassa a settings-et — nem kell újraépíteni.
+
+
+@app.get("/api/config", response_model=ConfigResponse)
+async def get_config(_: UserSession = Depends(get_admin_session)) -> ConfigResponse:
+    return ConfigResponse(**config_store.config_view())
+
+
+@app.put("/api/config", response_model=ConfigResponse)
+async def update_config(
+    payload: ConfigUpdateRequest,
+    _: UserSession = Depends(get_admin_session),
+    db: AsyncSession = Depends(get_db),
+) -> ConfigResponse:
+    values = {
+        key: value.strip()
+        for key, value in payload.values.items()
+        if key in config_store.EDITABLE_KEYS
+    }
+    if not values:
+        raise HTTPException(status_code=400, detail="Nincs érvényes konfigurációs kulcs a kérésben.")
+    await config_store.save_overrides(db, values)
+    config_store.apply_to_settings(values)
+    _reload_service_clients(_state())
+    logger.info("Konfiguráció frissítve a UI-ból: %s", ", ".join(sorted(values)))
+    return ConfigResponse(**config_store.config_view())
 
 
 # ── Dashboard: média sessionök + torrentek ───────────────────────────────────
@@ -776,37 +909,80 @@ async def chat_agent_stream(
 
     intent = _detect_intent(payload.message)
     logger.info("Agent(stream) | intent=%s | msg=%r", intent, payload.message[:80])
+    user_id = session.user_id
 
     def sse(obj: dict) -> str:
         return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
     async def event_generator():
-        try:
-            if intent in ("search", "add"):
-                result = await _agent_search_add(st, payload.message, intent)
-                yield sse({"type": "result", "payload": result.model_dump()})
-            else:
-                training_ctx = await _load_training_context()
-                system_prompt = training_ctx if training_ctx else DEFAULT_AGENT_PROMPT
-                try:
-                    async for chunk in st.search.ollama.chat_stream(payload.message, system_prompt):
-                        yield sse({"type": "token", "content": chunk})
-                except OllamaTimeout:
-                    yield sse({
-                        "type": "error",
-                        "message": "Az Ollama túl lassan válaszolt (időtúllépés). Próbálj rövidebb kérdést, vagy egy kisebb modellt.",
-                    })
-                except OllamaUnavailable:
-                    yield sse({"type": "error", "message": "A chat nem érhető el. Ellenőrizd, hogy az Ollama fut-e."})
-                except OllamaError:
-                    yield sse({
-                        "type": "error",
-                        "message": "Az Ollama szerver hibát adott. Ellenőrizd, hogy a beállított modell "
-                        f"('{settings.ollama_model}') létezik-e a szerveren.",
-                    })
-        except Exception:  # noqa: BLE001
-            logger.exception("Agent stream hiba")
-            yield sse({"type": "error", "message": "Váratlan hiba történt a válasz közben."})
+        # Saját DB session — a request-szintű dependency a stream élettartama
+        # alatt már nem garantáltan él.
+        async with SessionLocal() as db:
+            conversation = None
+            if payload.conversation_id:
+                conversation = await st.history.get_conversation(db, user_id, payload.conversation_id)
+            if conversation is None:
+                conversation = await st.history.create_conversation(db, user_id, payload.message)
+            yield sse({"type": "meta", "conversation_id": conversation.id})
+            await st.history.add_message(db, conversation, "user", payload.message)
+
+            reply_role = "assistant"
+            reply_content = ""
+            reply_action: str | None = None
+            reply_payload: str | None = None
+
+            try:
+                if intent in ("search", "add"):
+                    result = await _agent_search_add(st, payload.message, intent)
+                    yield sse({"type": "result", "payload": result.model_dump()})
+                    reply_content = result.message
+                    reply_action = result.action
+                    extra: dict = {}
+                    if result.results:
+                        extra["results"] = [r.model_dump() for r in result.results]
+                    if result.added:
+                        extra["added"] = result.added.model_dump()
+                    reply_payload = json.dumps(extra, ensure_ascii=False) if extra else None
+                else:
+                    reply_action = "chat"
+                    training_ctx = await _load_training_context()
+                    system_prompt = training_ctx if training_ctx else DEFAULT_AGENT_PROMPT
+                    try:
+                        async for chunk in st.search.ollama.chat_stream(payload.message, system_prompt):
+                            reply_content += chunk
+                            yield sse({"type": "token", "content": chunk})
+                    except OllamaTimeout:
+                        reply_role = "error"
+                        reply_content = (
+                            "Az Ollama túl lassan válaszolt (időtúllépés). Próbálj rövidebb kérdést, "
+                            "vagy egy kisebb modellt."
+                        )
+                        yield sse({"type": "error", "message": reply_content})
+                    except OllamaUnavailable:
+                        reply_role = "error"
+                        reply_content = "A chat nem érhető el. Ellenőrizd, hogy az Ollama fut-e."
+                        yield sse({"type": "error", "message": reply_content})
+                    except OllamaError:
+                        reply_role = "error"
+                        reply_content = (
+                            "Az Ollama szerver hibát adott. Ellenőrizd, hogy a beállított modell "
+                            f"('{settings.ollama_model}') létezik-e a szerveren."
+                        )
+                        yield sse({"type": "error", "message": reply_content})
+            except Exception:  # noqa: BLE001
+                logger.exception("Agent stream hiba")
+                reply_role = "error"
+                reply_content = "Váratlan hiba történt a válasz közben."
+                yield sse({"type": "error", "message": reply_content})
+
+            await st.history.add_message(
+                db,
+                conversation,
+                reply_role,
+                reply_content or "Üres válasz érkezett.",
+                action=reply_action,
+                payload=reply_payload,
+            )
         yield sse({"type": "done"})
 
     return StreamingResponse(

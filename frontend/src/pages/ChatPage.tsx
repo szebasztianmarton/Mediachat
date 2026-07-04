@@ -40,6 +40,21 @@ interface ChatMessage {
   added?: AddedInfo;
 }
 
+interface ConversationMeta {
+  id: string;
+  title: string;
+  updated_at?: string | null;
+}
+
+interface StoredMessage {
+  role: "user" | "assistant" | "error";
+  content: string;
+  action?: "search" | "add" | "chat" | null;
+  results?: MediaResult[] | null;
+  added?: AddedInfo | null;
+  created_at?: string | null;
+}
+
 // ── Inline search result card ─────────────────────────────────────────────────
 
 type AddState = "idle" | "adding" | "added" | "error";
@@ -224,9 +239,63 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [ollamaStatus, setOllamaStatus] = useState<ServiceStatus>("checking");
+  const [conversations, setConversations] = useState<ConversationMeta[]>([]);
+  const [currentConvId, setCurrentConvId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const loadConversations = useCallback(async () => {
+    try {
+      const data = await api<{ conversations: ConversationMeta[] }>("/api/conversations");
+      setConversations(data.conversations ?? []);
+    } catch {
+      // az előzmény-lista hibája nem akadályozza a chatet
+    }
+  }, []);
+
+  useEffect(() => { loadConversations(); }, [loadConversations]);
+
+  const openConversation = useCallback(async (id: string) => {
+    try {
+      const data = await api<{ id: string; title: string; messages: StoredMessage[] }>(
+        `/api/conversations/${id}`
+      );
+      setCurrentConvId(data.id);
+      setMessages(
+        data.messages.map((m) => ({
+          id: nextMsgId("hist"),
+          role: m.role,
+          content: m.content,
+          timestamp: m.created_at ? new Date(m.created_at) : new Date(),
+          action: m.action ?? undefined,
+          results: m.results ?? undefined,
+          added: m.added ?? undefined,
+        }))
+      );
+    } catch {
+      logger.error("chat", "A beszélgetés betöltése nem sikerült");
+    }
+  }, []);
+
+  const newConversation = useCallback(() => {
+    setCurrentConvId(null);
+    setMessages([{ ...WELCOME, timestamp: new Date() }]);
+    inputRef.current?.focus();
+  }, []);
+
+  const deleteConversation = useCallback(async (id: string) => {
+    try {
+      await api(`/api/conversations/${id}`, { method: "DELETE" });
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+      if (currentConvId === id) {
+        setCurrentConvId(null);
+        setMessages([{ ...WELCOME, timestamp: new Date() }]);
+      }
+    } catch {
+      logger.error("chat", "A beszélgetés törlése nem sikerült");
+    }
+  }, [currentConvId]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -314,7 +383,7 @@ export default function ChatPage() {
           "Content-Type": "application/json",
           ...(auth?.token ? { "X-Session-Token": auth.token } : {}),
         },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, conversation_id: currentConvId }),
       });
 
       if (res.status === 401) {
@@ -346,6 +415,7 @@ export default function ChatPage() {
             type: string;
             content?: string;
             message?: string;
+            conversation_id?: string;
             payload?: { action: string; message: string; results?: MediaResult[]; added?: AddedInfo };
           };
           try {
@@ -354,7 +424,9 @@ export default function ChatPage() {
             continue;
           }
 
-          if (event.type === "token" && event.content) {
+          if (event.type === "meta" && event.conversation_id) {
+            setCurrentConvId(event.conversation_id);
+          } else if (event.type === "token" && event.content) {
             ensureAiMessage();
             setMessages((prev) =>
               prev.map((m) => (m.id === aiId ? { ...m, content: m.content + event.content } : m))
@@ -396,6 +468,7 @@ export default function ChatPage() {
         )
       );
       logger.success("chat", `Válasz kész (${action ?? "chat"})`);
+      loadConversations(); // a lista sorrendje/címe frissül
     } catch (err) {
       const detail = err instanceof Error ? err.message : "Ismeretlen hiba";
       setMessages((prev) => [
@@ -463,8 +536,81 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Messages + Input area */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {/* Conversations + Messages + Input */}
+      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+
+        {/* Beszélgetés-lista */}
+        <aside
+          style={{
+            width: 200,
+            flexShrink: 0,
+            borderRight: "1px solid #E0E0E0",
+            background: "#F5F5F5",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+          className="hidden md:flex"
+        >
+          <div style={{ padding: "10px 10px 8px" }}>
+            <button onClick={newConversation} className="btn btn-secondary btn-sm" style={{ width: "100%", justifyContent: "center" }}>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+              </svg>
+              Új beszélgetés
+            </button>
+          </div>
+          <div style={{ flex: 1, overflowY: "auto", paddingBottom: 8 }}>
+            {conversations.length === 0 && (
+              <p className="text-xs text-gray-400 italic" style={{ padding: "6px 12px" }}>
+                Még nincs mentett beszélgetés
+              </p>
+            )}
+            {conversations.map((c) => (
+              <div
+                key={c.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => openConversation(c.id)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openConversation(c.id); } }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "7px 8px 7px 12px",
+                  cursor: "pointer",
+                  background: currentConvId === c.id ? "#E8E8E8" : "transparent",
+                  borderRight: currentConvId === c.id ? "2px solid #000000" : "2px solid transparent",
+                  transition: "none",
+                }}
+                onMouseEnter={(e) => { if (currentConvId !== c.id) e.currentTarget.style.background = "#E8E8E8"; }}
+                onMouseLeave={(e) => { if (currentConvId !== c.id) e.currentTarget.style.background = "transparent"; }}
+              >
+                <p
+                  className="text-xs truncate"
+                  style={{ flex: 1, color: currentConvId === c.id ? "#000000" : "#333333", margin: 0 }}
+                  title={c.title}
+                >
+                  {c.title}
+                </p>
+                <button
+                  onClick={(e) => { e.stopPropagation(); deleteConversation(c.id); }}
+                  className="btn btn-ghost btn-sm"
+                  style={{ padding: "2px 4px", color: "#888888", flexShrink: 0 }}
+                  title="Törlés"
+                  aria-label={`${c.title} törlése`}
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        </aside>
+
+        {/* Messages + Input area */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
         {/* Messages */}
         <div style={{ flex: 1, overflowY: "auto" }}>
@@ -642,6 +788,7 @@ export default function ChatPage() {
           </div>
         </div>
 
+        </div>
       </div>
     </AppShell>
   );

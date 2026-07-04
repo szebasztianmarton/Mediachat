@@ -54,6 +54,12 @@ A 2026. júliusi nagy javítási kör (3 commit: `b8a4a13` → `70de1ef` → `ba
 - **CI**: GitHub Actions workflow (frontend: typecheck+test+build; backend: pytest)
 - UI: `tabular-nums`, EB Garamond a Login címen, `configured:false` őszinte widget-üzenetek
 
+### 3. kör (P1 lezárása) — 2026-07-04
+- **Chat előzmények**: `conversations` + `conversation_messages` táblák, user-enkénti tulajdonjog-ellenőrzés; a stream végpont automatikusan létrehozza/folytatja a beszélgetést (`meta` esemény), a válaszok — találat-kártyákkal együtt — perzisztálódnak; ChatPage oldalsáv (új/megnyitás/törlés)
+- **Backend config API**: `config_overrides` tábla, admin-védett `GET/PUT /api/config`, induláskor betöltött felülírások, mentéskor azonnali kliens-újraépítés; titkok maszkolva (`****xxxx`), sosem utaznak vissza teljes értékkel
+- **Settings oldal élesítve**: a 7 támogatott szolgáltatás beállításai a szerverre mentenek és azonnal érvénybe lépnek; titkos mezőknél a placeholder jelzi a beállított értéket
+- Tesztek: 22 pytest + 11 Vitest (perzisztencia, tulajdonjog, config-maszkolás, regressziós teszt)
+
 ---
 
 ## 2. Ismert hibaforrások és kockázatok
@@ -94,8 +100,8 @@ Amit a átvizsgálás feltárt, de **tudatosan még nincs javítva**:
 6. ~~**qBittorrent integráció**~~ ✅ KÉSZ — `/api/torrents` élesítve (auth, állapot-mapping); pause/resume még nincs
 7. ~~**Plex/Jellyfin sessions**~~ ✅ KÉSZ — `/api/media/sessions` mindkét forrásból
 8. ~~**Streaming chat (SSE)**~~ ✅ KÉSZ — `/api/chat/agent/stream` + folyamatosan íródó válasz a UI-ban
-9. **Chat előzmények perzisztálása** — beszélgetések DB-be mentése user-enként, beszélgetés-lista a chat oldalsávjában
-10. **Backend config API** — a Settings oldal tényleges összekötése a szerverrel: admin-védett `GET/PUT /api/config`, env-felülírások DB-ben tárolva, kliensek újrainicializálása mentéskor. (Amíg nincs, a Settings marad "megjelenítés + figyelmeztetés".)
+9. ~~**Chat előzmények perzisztálása**~~ ✅ KÉSZ — beszélgetések DB-ben user-enként, oldalsáv a ChatPage-ben (megnyitás/törlés/új), a találat-kártyák is visszatöltődnek
+10. ~~**Backend config API**~~ ✅ KÉSZ — admin-védett `GET/PUT /api/config`, DB-ben tárolt env-felülírások, kliens-újraépítés mentéskor, maszkolt titkok; a Settings oldal Sonarr/Radarr/Ollama/TMDB/qBittorrent/Plex/Jellyfin szekciói a szerverre mentenek
 
 ### P2 — Bővítések
 
