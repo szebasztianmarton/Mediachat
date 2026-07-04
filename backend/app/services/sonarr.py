@@ -97,6 +97,26 @@ class SonarrClient:
             response.raise_for_status()
             return response.json().get("records") or []
 
+    async def get_series(self, series_id: int) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{self.base_url}/api/v3/series/{series_id}",
+                headers=self._headers(),
+            )
+            if response.status_code >= 400:
+                raise SonarrError(f"Sonarr get series failed: {response.status_code} {response.text}")
+            return response.json()
+
+    async def update_series(self, series: dict[str, Any]) -> None:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.put(
+                f"{self.base_url}/api/v3/series/{series['id']}",
+                headers=self._headers(),
+                json=series,
+            )
+            if response.status_code >= 400:
+                raise SonarrError(f"Sonarr update failed: {response.status_code} {response.text}")
+
     async def delete_series(self, series_id: int, delete_files: bool = False) -> None:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.delete(

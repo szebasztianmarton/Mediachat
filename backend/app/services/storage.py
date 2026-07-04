@@ -118,12 +118,18 @@ class StorageService:
         delete_files = settings.storage_delete_files and action == "delete"
         if media_type == "movie":
             if action == "unmonitor":
-                return "Radarr unmonitor még nincs implementálva; használj delete módot."
+                movie = await self.radarr.get_movie(arr_id)
+                movie["monitored"] = False
+                await self.radarr.update_movie(movie)
+                return "Film megfigyelése kikapcsolva (unmonitored)."
             await self.radarr.delete_movie(arr_id, delete_files=delete_files)
             return f"Film törölve (deleteFiles={delete_files})."
 
         if action == "unmonitor":
-            return "Sonarr unmonitor még nincs implementálva; használj delete módot."
+            series = await self.sonarr.get_series(arr_id)
+            series["monitored"] = False
+            await self.sonarr.update_series(series)
+            return "Sorozat megfigyelése kikapcsolva (unmonitored)."
         await self.sonarr.delete_series(arr_id, delete_files=delete_files)
         return f"Sorozat törölve (deleteFiles={delete_files})."
 

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -8,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.models import AddJob
 from app.services.search import SearchService
+
+logger = logging.getLogger(__name__)
 
 
 class QueueService:
@@ -21,13 +24,34 @@ class QueueService:
         if self._running:
             return
         self._running = True
+        await self._recover_pending()
         for _ in range(settings.queue_max_workers):
             self._workers.append(asyncio.create_task(self._worker()))
+
+    async def _recover_pending(self) -> None:
+        """Újraindítás után a DB-ben ragadt queued/processing jobok visszakerülnek
+        a sorba — az in-memory queue restartkor elveszik."""
+        from app.db.database import SessionLocal
+
+        async with SessionLocal() as db:
+            result = await db.execute(
+                select(AddJob).where(AddJob.status.in_(("queued", "processing")))
+            )
+            jobs = list(result.scalars().all())
+            for job in jobs:
+                job.status = "queued"
+            if jobs:
+                await db.commit()
+        for job in jobs:
+            await self._queue.put(job.id)
+        if jobs:
+            logger.info("Queue recovery: %d függő job visszaállítva.", len(jobs))
 
     async def stop(self) -> None:
         self._running = False
         for task in self._workers:
             task.cancel()
+        await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
 
     async def enqueue_add(

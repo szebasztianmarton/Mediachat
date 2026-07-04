@@ -48,12 +48,17 @@ class SearchService:
         use_description = mode == "description" or (
             mode == "auto" and self._looks_like_description(query)
         )
+        # Auto módban TMDB kulcs nélkül nincs leírás-alapú keresés — cím alapú
+        # keresésre esünk vissza hiba helyett.
+        if use_description and mode == "auto" and not self.tmdb.configured:
+            use_description = False
         if not use_description:
             results, suggested_type = await self._title_search(query)
             if results and results[0].match_score >= self.TITLE_MATCH_THRESHOLD:
                 await self._store_cache(cache_key, results, suggested_type, "title")
                 return results, suggested_type, "title"
-            if mode == "title":
+            if mode == "title" or not self.tmdb.configured:
+                # Gyenge cím-találat is jobb, mint egy 400-as hiba.
                 await self._store_cache(cache_key, results, suggested_type, "title")
                 return results, suggested_type, "title"
 

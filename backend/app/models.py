@@ -77,15 +77,36 @@ class AgentChatResponse(BaseModel):
     added: AgentMediaAdded | None = None
 
 
-class SessionCreateRequest(BaseModel):
-    display_name: str = "Felhasználó"
-    platform: str = "web"
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=128)
 
 
-class SessionResponse(BaseModel):
-    session_token: str
-    user_id: str
+class UserInfo(BaseModel):
+    id: str
+    username: str | None = None
     display_name: str
+    role: str = "user"
+    created_at: str | None = None
+
+
+class LoginResponse(BaseModel):
+    token: str
+    user: UserInfo
+
+
+class UserCreateRequest(BaseModel):
+    username: str = Field(..., min_length=2, max_length=64)
+    password: str = Field(..., min_length=4, max_length=128)
+    role: Literal["admin", "user"] = "user"
+
+
+class PasswordUpdateRequest(BaseModel):
+    password: str = Field(..., min_length=4, max_length=128)
+
+
+class UsersResponse(BaseModel):
+    users: list[UserInfo]
 
 
 class JobResponse(BaseModel):

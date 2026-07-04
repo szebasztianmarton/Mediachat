@@ -93,6 +93,26 @@ class RadarrClient:
             response.raise_for_status()
             return response.json().get("records") or []
 
+    async def get_movie(self, movie_id: int) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{self.base_url}/api/v3/movie/{movie_id}",
+                headers=self._headers(),
+            )
+            if response.status_code >= 400:
+                raise RadarrError(f"Radarr get movie failed: {response.status_code} {response.text}")
+            return response.json()
+
+    async def update_movie(self, movie: dict[str, Any]) -> None:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.put(
+                f"{self.base_url}/api/v3/movie/{movie['id']}",
+                headers=self._headers(),
+                json=movie,
+            )
+            if response.status_code >= 400:
+                raise RadarrError(f"Radarr update failed: {response.status_code} {response.text}")
+
     async def delete_movie(self, movie_id: int, delete_files: bool = False) -> None:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.delete(

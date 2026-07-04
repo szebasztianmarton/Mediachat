@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     app_secret: str = "change-me"
     app_url: str = "http://localhost:8000"
 
+    # Első indításkor létrehozott admin fiók
+    admin_username: str = "admin"
+    admin_password: str = "media2024"
+    session_ttl_days: int = 30
+
     database_url: str = "sqlite+aiosqlite:///./data/media_bot.db"
 
     redis_url: str = "redis://localhost:6379/0"

@@ -14,6 +14,18 @@ class OllamaError(Exception):
     pass
 
 
+class OllamaTimeout(OllamaError):
+    pass
+
+
+class OllamaUnavailable(OllamaError):
+    pass
+
+
+# Meddig maradjon a modell a memóriában két kérés között (nincs hidegindítás).
+KEEP_ALIVE = "30m"
+
+
 class OllamaClient:
     def __init__(self) -> None:
         self.base_url = settings.ollama_base_url.rstrip("/")
@@ -22,6 +34,56 @@ class OllamaClient:
     @property
     def configured(self) -> bool:
         return bool(self.base_url and self.model)
+
+    def _chat_body(self, system_prompt: str, message: str, num_predict: int) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": message},
+            ],
+            "stream": False,
+            "keep_alive": KEEP_ALIVE,
+            "options": {"num_predict": num_predict, "num_ctx": 4096, "temperature": 0.4},
+        }
+        # A gemma4 "thinking" modellek minden válasz elé hosszú belső érvelést
+        # generálnak — ezeknél kikapcsoljuk. A nem thinking-modellek hibát adnának
+        # a "think" paraméterre, ezért nekik nem küldjük.
+        if "gemma4" in self.model.lower():
+            body["think"] = False
+        return body
+
+    async def chat(
+        self,
+        message: str,
+        system_prompt: str,
+        num_predict: int = 400,
+        timeout: float = 180.0,
+    ) -> str:
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                res = await client.post(
+                    f"{self.base_url}/api/chat",
+                    json=self._chat_body(system_prompt, message, num_predict),
+                )
+        except httpx.TimeoutException as exc:
+            raise OllamaTimeout(str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise OllamaUnavailable(str(exc)) from exc
+        if res.status_code >= 400:
+            logger.warning("Ollama chat hiba: %s %s", res.status_code, res.text[:300])
+            raise OllamaError(f"HTTP {res.status_code}")
+        body = res.json()
+        content = (body.get("message") or {}).get("content") or ""
+        return content.strip()
+
+    async def warmup(self) -> None:
+        """Előmelegíti a modellt induláskor, hogy az első chat ne legyen lassú."""
+        try:
+            await self.chat("ping", "ping", num_predict=1, timeout=120.0)
+            logger.info("Ollama modell előmelegítve: %s", self.model)
+        except OllamaError as exc:
+            logger.warning("Ollama előmelegítés sikertelen: %s", exc)
 
     async def ping(self) -> tuple[bool, str | None]:
         """Kétlépéses ellenőrzés: /api/tags (gyors), fallback: /api/generate (funkcionális)."""

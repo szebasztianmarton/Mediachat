@@ -2,8 +2,8 @@ import logging
 
 import discord
 
+from app import state
 from app.config import settings
-from app.state import app_state
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +13,7 @@ class MediaBot(discord.Client):
         logger.info("Discord bot logged in as %s", self.user)
 
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot or app_state is None:
+        if message.author.bot or state.app_state is None:
             return
         if not message.content.startswith("!search "):
             return
@@ -25,7 +25,7 @@ class MediaBot(discord.Client):
 
         await message.channel.send("Keresés folyamatban...")
         try:
-            results, _, search_mode = await app_state.search.search(query, mode="auto")
+            results, _, search_mode = await state.app_state.search.search(query, mode="auto")
         except Exception as exc:  # noqa: BLE001
             await message.channel.send(f"Hiba: {exc}")
             return

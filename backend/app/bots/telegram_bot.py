@@ -1,12 +1,24 @@
+import asyncio
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
+from app import state
 from app.config import settings
-from app.state import app_state
 
 logger = logging.getLogger(__name__)
+
+# Telegram callback_data limit: 64 bájt (nem karakter — az ékezetes betűk
+# UTF-8-ban többájtosak).
+_CALLBACK_MAX_BYTES = 64
+
+
+def _truncate_bytes(text: str, max_bytes: int) -> str:
+    if max_bytes <= 0:
+        return ""
+    encoded = text.encode("utf-8")[:max_bytes]
+    return encoded.decode("utf-8", errors="ignore")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -17,13 +29,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if app_state is None or update.message is None:
+    if state.app_state is None or update.message is None:
         return
 
     query = update.message.text.strip()
     await update.message.reply_text("Keresés folyamatban...")
     try:
-        results, _, search_mode = await app_state.search.search(query, mode="auto")
+        results, _, search_mode = await state.app_state.search.search(query, mode="auto")
     except Exception as exc:  # noqa: BLE001
         await update.message.reply_text(f"Hiba: {exc}")
         return
@@ -35,11 +47,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     buttons = []
     for result in results[:5]:
         label = f"{result.title} ({'Film' if result.media_type == 'movie' else 'Sorozat'})"
-        # Telegram callback_data limit: 64 bytes
-        # "add:series:1234567890:1234567890:" = 33 chars fixed → title max 30 chars
-        safe_title = result.title.replace(":", " ")[:30]
-        callback = f"add:{result.media_type}:{result.external_id}:{result.tmdb_id or 0}:{safe_title}"
-        buttons.append([InlineKeyboardButton(label, callback_data=callback)])
+        prefix = f"add:{result.media_type}:{result.external_id}:{result.tmdb_id or 0}:"
+        safe_title = _truncate_bytes(
+            result.title.replace(":", " "),
+            _CALLBACK_MAX_BYTES - len(prefix.encode("utf-8")),
+        )
+        buttons.append([InlineKeyboardButton(label, callback_data=prefix + safe_title)])
 
     await update.message.reply_text(
         f"Találatok ({search_mode} keresés):",
@@ -48,7 +61,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def handle_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if app_state is None or update.callback_query is None:
+    if state.app_state is None or update.callback_query is None:
         return
 
     query = update.callback_query
@@ -60,7 +73,7 @@ async def handle_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     _, media_type, external_id, tmdb_id, title = parts
     try:
-        added_title, note = await app_state.search.add(
+        added_title, note = await state.app_state.search.add(
             media_type=media_type,  # type: ignore[arg-type]
             external_id=int(external_id),
             title=title,
@@ -84,5 +97,15 @@ async def run_telegram_bot() -> None:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(CallbackQueryHandler(handle_add, pattern=r"^add:"))
 
+    # run_polling() saját event loopot kezelne, ami a futó FastAPI loopban
+    # kivételt dob — helyette a manuális initialize/start/start_polling minta.
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
     logger.info("Telegram bot started")
-    await application.run_polling(stop_signals=None)
+    try:
+        await asyncio.Event().wait()  # fut, amíg a lifespan le nem állítja a taskot
+    finally:
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()

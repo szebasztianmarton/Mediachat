@@ -96,7 +96,7 @@ def rank_tmdb_results(
 
 
 def rank_local_results(items: list[dict[str, Any]], query: str, limit: int = 10) -> list[dict[str, Any]]:
-    items.sort(key=lambda row: row["match_score"], reverse=True)
-    for index, row in enumerate(items[:limit]):
+    ranked = sorted(items, key=lambda row: row["match_score"], reverse=True)[:limit]
+    for index, row in enumerate(ranked):
         row["suggested"] = index == 0
-    return items[:limit]
+    return ranked

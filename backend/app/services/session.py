@@ -1,33 +1,151 @@
+import hashlib
+import hmac
+import logging
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.db.models import User, UserSession
+
+logger = logging.getLogger(__name__)
+
+_PBKDF2_ITERATIONS = 390_000
+_LAST_SEEN_UPDATE_INTERVAL = timedelta(minutes=5)
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), bytes.fromhex(salt), _PBKDF2_ITERATIONS
+    )
+    return f"pbkdf2_sha256${_PBKDF2_ITERATIONS}${salt}${digest.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        _algo, iterations, salt, expected = stored.split("$", 3)
+        digest = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), bytes.fromhex(salt), int(iterations)
+        )
+        return hmac.compare_digest(digest.hex(), expected)
+    except (ValueError, TypeError):
+        return False
+
+
+def _as_aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
 
 
 class SessionService:
-    async def create_session(
+    async def authenticate(
         self,
         db: AsyncSession,
-        display_name: str = "Felhasználó",
+        username: str,
+        password: str,
         platform: str = "web",
-    ) -> tuple[User, UserSession]:
-        user = User(display_name=display_name.strip() or "Felhasználó")
-        session = UserSession(user=user, token=secrets.token_urlsafe(32), platform=platform)
-        db.add(user)
+    ) -> tuple[User, UserSession] | None:
+        result = await db.execute(select(User).where(User.username == username.strip().lower()))
+        user = result.scalar_one_or_none()
+        if user is None or not user.password_hash:
+            # Konstans idejű viselkedéshez akkor is hash-elünk, ha nincs ilyen user.
+            verify_password(password, hash_password("dummy"))
+            return None
+        if not verify_password(password, user.password_hash):
+            return None
+        session = UserSession(user_id=user.id, token=secrets.token_urlsafe(32), platform=platform)
         db.add(session)
         await db.commit()
-        await db.refresh(user)
         await db.refresh(session)
         return user, session
 
     async def get_session(self, db: AsyncSession, token: str) -> UserSession | None:
-        result = await db.execute(select(UserSession).where(UserSession.token == token))
+        result = await db.execute(
+            select(UserSession)
+            .where(UserSession.token == token)
+            .options(selectinload(UserSession.user))
+        )
         session = result.scalar_one_or_none()
         if session is None:
             return None
-        session.last_seen_at = datetime.now(UTC)
-        await db.commit()
+
+        now = datetime.now(UTC)
+        last_seen = _as_aware(session.last_seen_at) or _as_aware(session.created_at)
+        if last_seen is not None and now - last_seen > timedelta(days=settings.session_ttl_days):
+            await db.delete(session)
+            await db.commit()
+            return None
+
+        # Ne írjunk minden kérésnél — csak ha az utolsó frissítés régebbi 5 percnél.
+        if last_seen is None or now - last_seen > _LAST_SEEN_UPDATE_INTERVAL:
+            session.last_seen_at = now
+            await db.commit()
         return session
+
+    async def revoke(self, db: AsyncSession, token: str) -> None:
+        await db.execute(delete(UserSession).where(UserSession.token == token))
+        await db.commit()
+
+    async def create_user(
+        self,
+        db: AsyncSession,
+        username: str,
+        password: str,
+        role: str = "user",
+    ) -> User:
+        username = username.strip().lower()
+        result = await db.execute(select(User).where(User.username == username))
+        if result.scalar_one_or_none() is not None:
+            raise ValueError("Ez a felhasználónév már foglalt.")
+        user = User(
+            username=username,
+            display_name=username,
+            password_hash=hash_password(password),
+            role=role,
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        return user
+
+    async def list_users(self, db: AsyncSession) -> list[User]:
+        result = await db.execute(
+            select(User).where(User.username.is_not(None)).order_by(User.created_at)
+        )
+        return list(result.scalars().all())
+
+    async def get_user(self, db: AsyncSession, user_id: str) -> User | None:
+        result = await db.execute(select(User).where(User.id == user_id))
+        return result.scalar_one_or_none()
+
+    async def delete_user(self, db: AsyncSession, user_id: str) -> None:
+        await db.execute(delete(UserSession).where(UserSession.user_id == user_id))
+        await db.execute(delete(User).where(User.id == user_id))
+        await db.commit()
+
+    async def update_password(self, db: AsyncSession, user_id: str, password: str) -> None:
+        user = await self.get_user(db, user_id)
+        if user is None:
+            raise ValueError("A felhasználó nem található.")
+        user.password_hash = hash_password(password)
+        # Jelszócsere után minden meglévő session érvénytelen.
+        await db.execute(delete(UserSession).where(UserSession.user_id == user_id))
+        await db.commit()
+
+    async def ensure_admin(self, db: AsyncSession, username: str, password: str) -> None:
+        """Első indításkor létrehozza az admin fiókot, ha még nincs bejelentkezésre
+        alkalmas admin felhasználó."""
+        result = await db.execute(
+            select(User).where(User.role == "admin", User.password_hash.is_not(None))
+        )
+        if result.scalars().first() is not None:
+            return
+        await self.create_user(db, username, password, role="admin")
+        logger.info("Admin felhasználó létrehozva: %s", username)
