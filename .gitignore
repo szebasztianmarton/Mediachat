@@ -1,0 +1,22 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.venv/
+.venv_dev/
+venv/
+
+node_modules/
+dist/
+*.tsbuildinfo
+
+backend/data/*.db
+backend/data/cache/
+
+# AI tooling (skill csomagok, nem projektkód)
+.agents/
+.claude/
+.codex/
+
+.DS_Store

@@ -1,0 +1,17 @@
+{
+  "name": "media-chatbot",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "pnpm dev:infra && concurrently -n backend,frontend -c blue,green \"pnpm dev:backend\" \"pnpm dev:frontend\"",
+    "dev:infra": "scripts\\dev-infra.bat",
+    "dev:backend": "backend\\serve.bat",
+    "dev:frontend": "pnpm --filter media-chatbot-frontend dev",
+    "build": "pnpm --filter media-chatbot-frontend build",
+    "infra:down": "docker compose -f docker-compose.dev.yml down",
+    "setup": "pnpm install && cd backend && uv venv .venv_dev --python 3.11 && uv pip install -r requirements.txt --python .venv_dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

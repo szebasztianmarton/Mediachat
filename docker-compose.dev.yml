@@ -1,0 +1,21 @@
+# Fejlesztői infrastruktúra a `pnpm dev`-hez.
+# Csak azt indítja, amire a helyi backendnek szüksége van: Redis (cache).
+# A Sonarr/Radarr/Ollama/TMDB távoli/külső szolgáltatások (192.168.1.57),
+# az adatbázis pedig dev módban SQLite — ezért itt nincs postgres.
+#
+# A 6380-as host port azért kell, hogy ne ütközzön egy másik projekt
+# Redisével, ami már a 6379-en fut.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: media-chatbot-dev-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6380:6379"
+    volumes:
+      - media_dev_redis:/data
+
+volumes:
+  media_dev_redis:

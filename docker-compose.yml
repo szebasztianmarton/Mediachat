@@ -1,0 +1,79 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: media-chatbot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-media_bot}
+      POSTGRES_USER: ${POSTGRES_USER:-media_bot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - media-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: media-chatbot-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - media-net
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: media-chatbot-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - media-net
+
+  backend:
+    build:
+      context: ./backend
+    container_name: media-chatbot-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-media_bot}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-media_bot}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: http://ollama:11434
+    volumes:
+      - app_data:/data
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - postgres
+      - redis
+      - ollama
+    networks:
+      - media-net
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: media-chatbot-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - media-net
+
+networks:
+  media-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
+  app_data:

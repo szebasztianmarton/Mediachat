@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: media-chatbot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-media_bot}
+      POSTGRES_USER: ${POSTGRES_USER:-media_bot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - /mnt/tank/appdata/media-chatbot/postgres:/var/lib/postgresql/data
+    networks:
+      - media-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-media_bot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: media-chatbot-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - /mnt/tank/appdata/media-chatbot/redis:/data
+    networks:
+      - media-net
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: media-chatbot-ollama
+    restart: unless-stopped
+    volumes:
+      - /mnt/tank/appdata/media-chatbot/ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - media-net
+    # GPU támogatás (NVidia): az alábbi sorokat szedd ki kommentből
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  backend:
+    image: ghcr.io/GITHUB_USER/media-chatbot-backend:latest
+    container_name: media-chatbot-backend
+    restart: unless-stopped
+    env_file:
+      - /mnt/tank/appdata/media-chatbot/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-media_bot}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-media_bot}
+      REDIS_URL: redis://redis:6379/0
+      REDIS_ENABLED: "true"
+      OLLAMA_BASE_URL: http://ollama:11434
+    volumes:
+      - /mnt/tank/appdata/media-chatbot/app:/data
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      ollama:
+        condition: service_started
+    networks:
+      - media-net
+
+  frontend:
+    image: ghcr.io/GITHUB_USER/media-chatbot-frontend:latest
+    container_name: media-chatbot-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - media-net
+
+networks:
+  media-net:
+    driver: bridge
