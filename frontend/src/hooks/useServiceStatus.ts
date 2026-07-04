@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { ServiceHealth, ServiceStatus } from "../types";
 
 interface HealthResponse {
@@ -27,11 +27,20 @@ export function useServiceStatus(autoRefresh = true) {
     makeService("redis", "Redis"),
   ]);
 
+  const abortRef = useRef<AbortController | null>(null);
+
   const check = useCallback(async () => {
+    // Az előző, még futó kérést megszakítjuk — így a kései válasz nem írhatja
+    // felül az újabb állapotot, és unmount után sincs setState.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     const start = Date.now();
     try {
-      const res = await fetch("/health");
+      const res = await fetch("/health", { signal: controller.signal });
       const latency = Date.now() - start;
+      if (controller.signal.aborted) return;
 
       if (!res.ok) {
         let backendError = `Backend hiba (HTTP ${res.status})`;
@@ -51,6 +60,7 @@ export function useServiceStatus(autoRefresh = true) {
       }
 
       const data: HealthResponse = await res.json();
+      if (controller.signal.aborted) return;
 
       setServices([
         { key: "backend", name: "Backend API", status: "online", latency },
@@ -86,6 +96,7 @@ export function useServiceStatus(autoRefresh = true) {
         },
       ]);
     } catch {
+      if (controller.signal.aborted) return;
       setServices((prev) =>
         prev.map((s) => ({
           ...s,
@@ -98,9 +109,14 @@ export function useServiceStatus(autoRefresh = true) {
 
   useEffect(() => {
     check();
-    if (!autoRefresh) return;
+    if (!autoRefresh) {
+      return () => abortRef.current?.abort();
+    }
     const id = setInterval(check, 30_000);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      abortRef.current?.abort();
+    };
   }, [check, autoRefresh]);
 
   return { services, refresh: check };

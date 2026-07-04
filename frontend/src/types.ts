@@ -4,39 +4,21 @@ export type UserRole = "admin" | "user";
 // ── Authentication ──────────────────────────────────────────────────────────
 
 export interface AuthData {
+  token: string;
   userId: string;
   username: string;
   role: UserRole;
 }
 
-// ── User management ──────────────────────────────────────────────────────────
+// ── User management (backend API) ────────────────────────────────────────────
 
-export interface User {
+export interface ApiUser {
   id: string;
-  username: string;
-  password: string; // plain text — demo/personal project only
+  username: string | null;
+  display_name: string;
   role: UserRole;
-  createdAt: string; // ISO string
+  created_at: string | null;
 }
-
-export const USERS_KEY = "mediachat-users";
-
-export const DEFAULT_USERS: User[] = [
-  {
-    id: "u-admin",
-    username: "admin",
-    password: "media2024",
-    role: "admin",
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: "u-user",
-    username: "user",
-    password: "user2024",
-    role: "user",
-    createdAt: new Date().toISOString(),
-  },
-];
 
 // ── Service health ───────────────────────────────────────────────────────────
 

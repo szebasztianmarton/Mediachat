@@ -17,12 +17,12 @@ A részletes tervezési dokumentáció: [Media Assistant Chatbot.md](./Media%20A
 
 - **Cím alapú keresés** – a bot eldönti, film vagy sorozat, és megkeresi.
 - **Leírás alapú keresés** – az LLM kulcsszavakat nyer ki, a TMDb-ben keres.
-- **Automatikus hozzáadás** – Radarr / Sonarr API-n keresztül, 1080p korláttal.
-- **Több felhasználó** – session-token alapú azonosítás.
-- **Ajánlórendszer** – `watched`, `liked`, `continue` katalógusok.
-- **Tárhelymenedzsment** – állapot, cache takarítás, elavult tartalom kezelése.
+- **Automatikus hozzáadás** – Radarr / Sonarr API-n keresztül, 1080p korláttal, háttér-jobbal.
+- **Valódi autentikáció** – hash-elt jelszavak, session tokenek, admin/user szerepkörök.
+- **Ajánlórendszer** – `watched`, `liked`, `continue` katalógusok + like/dislike visszajelzés.
+- **Tárhelymenedzsment** – állapot, cache takarítás, elavult tartalom kezelése (delete/unmonitor).
 - **Botok** – opcionális Telegram és Discord integráció.
-- **PWA frontend** – mobilbarát webes chat felület.
+- **Webes felület** – reMarkable e-ink stílusú React UI (chat, dashboard, ajánlások, tárhely, felhasználók, tanítás, naplók).
 
 ---
 
@@ -99,7 +99,7 @@ pnpm dev
 Ez párhuzamosan elindítja:
 
 - **backend** → http://localhost:8000 (`uvicorn --reload`)
-- **frontend** → http://localhost:3000 (`vite`)
+- **frontend** → http://localhost:3100 (`vite`)
 
 A logok címkézve (`backend` / `frontend`) jelennek meg ugyanabban a terminálban;
 `Ctrl+C` mindkettőt leállítja.
@@ -123,49 +123,57 @@ A logok címkézve (`backend` / `frontend`) jelennek meg ugyanabban a terminálb
 
 ### Webes felület
 
-Nyisd meg a http://localhost:3000 címet, írd be a kérést (pl. *„a 2010-es Eredet”*
-vagy *„űrhajós film ahol egyedül marad a Marson”*). A bot kártyákban listázza a
-találatokat – válassz, és nyomd meg a hozzáadás gombot.
+Nyisd meg a http://localhost:3100 címet, és jelentkezz be (alapértelmezett:
+`admin / media2024` — az `ADMIN_USERNAME` / `ADMIN_PASSWORD` env-változóval
+módosítható; **éles használat előtt változtasd meg**). Írd be a kérést (pl.
+*„a 2010-es Eredet”* vagy *„űrhajós film ahol egyedül marad a Marson”*). A bot
+kártyákban listázza a találatokat – válassz, és nyomd meg a hozzáadás gombot.
 
 ### REST API
 
 A backend főbb végpontjai (teljes lista + Swagger: http://localhost:8000/docs):
 
-| Metódus | Útvonal | Funkció |
-| --- | --- | --- |
-| `GET`  | `/health` | szolgáltatások állapota |
-| `POST` | `/api/session` | session létrehozása |
-| `POST` | `/api/search` | keresés (cím vagy leírás) |
-| `POST` | `/api/add` | tartalom hozzáadása Sonarr/Radarr-hoz |
-| `GET`  | `/api/jobs/{job_id}` | aszinkron hozzáadás állapota |
-| `GET`  | `/api/recommendations/{catalog}` | ajánlások (`watched`/`liked`/`continue`) |
-| `POST` | `/api/feedback` | like/dislike visszajelzés |
-| `GET`  | `/api/storage/status` | tárhely állapot |
-| `POST` | `/api/storage/cleanup` | cache takarítás |
-| `GET`  | `/api/storage/stale` | elavult tartalmak listája |
-| `POST` | `/api/storage/stale/action` | elavult tartalom kezelése |
+| Metódus | Útvonal | Funkció | Jogosultság |
+| --- | --- | --- | --- |
+| `GET`  | `/health` | szolgáltatások állapota | nyilvános |
+| `POST` | `/api/auth/login` | bejelentkezés (token) | nyilvános |
+| `POST` | `/api/auth/logout` | session visszavonása | session |
+| `GET`  | `/api/auth/me` | aktuális felhasználó | session |
+| `GET/POST/DELETE` | `/api/users[...]` | felhasználókezelés | admin |
+| `POST` | `/api/search` | keresés (cím vagy leírás) | session |
+| `POST` | `/api/add` | tartalom hozzáadása Sonarr/Radarr-hoz | session |
+| `GET`  | `/api/jobs/{job_id}` | aszinkron hozzáadás állapota | session |
+| `GET`  | `/api/recommendations/{catalog}` | ajánlások (`watched`/`liked`/`continue`) | session |
+| `POST` | `/api/feedback` | like/dislike visszajelzés | session |
+| `POST` | `/api/chat/agent` | chat agent (keresés/hozzáadás/LLM) | session |
+| `GET`  | `/api/storage/status` | tárhely állapot | admin |
+| `POST` | `/api/storage/cleanup` | cache takarítás | admin |
+| `GET`  | `/api/storage/stale` | elavult tartalmak listája | admin |
+| `POST` | `/api/storage/stale/action` | elavult tartalom kezelése (delete/unmonitor) | admin |
+| `GET/PUT/DELETE` | `/api/training/files[...]` | LLM tanítófájlok | admin |
 
-A session- és felhasználói végpontok `Authorization` fejlécben várják a session-tokent.
+A védett végpontok az `X-Session-Token` fejlécben várják a tokent.
 
 #### Példa folyamat
 
 ```bash
-# 1. Session létrehozása
-curl -X POST http://localhost:8000/api/session \
+# 1. Bejelentkezés
+curl -X POST http://localhost:8000/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"display_name": "Szeba", "platform": "web"}'
-# → { "session_token": "abc...", "user_id": 1, "display_name": "Szeba" }
+  -d '{"username": "admin", "password": "media2024"}'
+# → { "token": "abc...", "user": { "id": "...", "role": "admin", ... } }
 
 # 2. Keresés
 curl -X POST http://localhost:8000/api/search \
   -H "Content-Type: application/json" \
+  -H "X-Session-Token: <token>" \
   -d '{"query": "Eredet", "mode": "auto"}'
 
 # 3. Hozzáadás (a találatból kapott external_id / media_type alapján)
 curl -X POST http://localhost:8000/api/add \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <session_token>" \
-  -d '{"media_type": "movie", "external_id": "27205", "title": "Eredet", "tmdb_id": 27205}'
+  -H "X-Session-Token: <token>" \
+  -d '{"media_type": "movie", "external_id": 27205, "title": "Eredet", "tmdb_id": 27205}'
 ```
 
 > A `mode` lehet `auto` (alapértelmezett), `title` vagy `description`.

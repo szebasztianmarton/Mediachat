@@ -89,5 +89,12 @@ export const logger = {
     addLog("error", cat, msg, detail),
 };
 
-// Bootstrap log entry on module load
-addLog("info", "system", "Media Assistant elindult");
+// Bootstrap log — munkamenetenként csak egyszer, ne gyűljön minden újratöltésnél
+try {
+  if (!sessionStorage.getItem("mediachat-booted")) {
+    sessionStorage.setItem("mediachat-booted", "1");
+    addLog("info", "system", "Media Assistant elindult");
+  }
+} catch {
+  addLog("info", "system", "Media Assistant elindult");
+}

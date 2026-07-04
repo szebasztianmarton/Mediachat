@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useNavigate } from "react-router-dom";
 import AppShell from "../components/AppShell";
-import { AUTH_KEY } from "../types";
+import { api, ApiError } from "../utils/api";
 import { logger } from "../utils/logger";
 
 interface FileMeta {
@@ -30,8 +29,6 @@ function renderMarkdown(md: string): string {
 }
 
 export default function TrainingPage() {
-  const navigate = useNavigate();
-
   const [files, setFiles] = useState<FileMeta[]>([]);
   const [hasSystem, setHasSystem] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -44,16 +41,9 @@ export default function TrainingPage() {
   const [error, setError] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
-    const auth = localStorage.getItem(AUTH_KEY);
-    if (!auth) navigate("/login", { replace: true });
-  }, [navigate]);
-
   const loadFiles = useCallback(async () => {
     try {
-      const res = await fetch("/api/training/files");
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await api<{ files?: FileMeta[]; has_system_prompt?: boolean }>("/api/training/files");
       setFiles(data.files ?? []);
       setHasSystem(data.has_system_prompt ?? false);
     } catch {
@@ -67,9 +57,7 @@ export default function TrainingPage() {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`/api/training/files/${encodeURIComponent(name)}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await api<{ content?: string }>(`/api/training/files/${encodeURIComponent(name)}`);
       setContent(data.content ?? "");
       setSelected(name);
       setSaved(true);
@@ -86,17 +74,15 @@ export default function TrainingPage() {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`/api/training/files/${encodeURIComponent(selected)}`, {
+      await api(`/api/training/files/${encodeURIComponent(selected)}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setSaved(true);
       await loadFiles();
       logger.success("training", `Mentve: ${selected}`);
-    } catch {
-      setError("Mentés sikertelen.");
+    } catch (err) {
+      setError(err instanceof ApiError ? `Mentés sikertelen: ${err.message}` : "Mentés sikertelen.");
     } finally {
       setLoading(false);
     }
@@ -105,13 +91,12 @@ export default function TrainingPage() {
   const deleteFile = useCallback(async (name: string) => {
     if (!confirm(`Törli: ${name}?`)) return;
     try {
-      const res = await fetch(`/api/training/files/${encodeURIComponent(name)}`, { method: "DELETE" });
-      if (!res.ok) throw new Error();
+      await api(`/api/training/files/${encodeURIComponent(name)}`, { method: "DELETE" });
       if (selected === name) { setSelected(null); setContent(""); }
       await loadFiles();
       logger.info("training", `Törölve: ${name}`);
-    } catch {
-      setError("Törlés sikertelen.");
+    } catch (err) {
+      setError(err instanceof ApiError ? `Törlés sikertelen: ${err.message}` : "Törlés sikertelen.");
     }
   }, [selected, loadFiles]);
 
@@ -125,17 +110,16 @@ export default function TrainingPage() {
     }
     setError("");
     try {
-      await fetch(`/api/training/files/${encodeURIComponent(fname)}`, {
+      await api(`/api/training/files/${encodeURIComponent(fname)}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: `# ${raw}\n\n` }),
       });
       await loadFiles();
       await loadFile(fname);
       setNewName("");
       setShowNew(false);
-    } catch {
-      setError("Nem sikerült létrehozni a fájlt.");
+    } catch (err) {
+      setError(err instanceof ApiError ? `Nem sikerült létrehozni: ${err.message}` : "Nem sikerült létrehozni a fájlt.");
     }
   }, [newName, loadFiles, loadFile]);
 
@@ -285,10 +269,10 @@ export default function TrainingPage() {
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); deleteFile(f.name); }}
-                  className="btn btn-ghost btn-sm opacity-0 group-hover:opacity-100"
+                  className="btn btn-ghost btn-sm"
                   style={{ padding: "2px 4px", color: "#888888" }}
                   title="Törlés"
-                  onMouseEnter={(e) => e.currentTarget.style.opacity = "1"}
+                  aria-label={`${f.stem} törlése`}
                 >
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />

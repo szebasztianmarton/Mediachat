@@ -1,9 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
 import AppShell from "../components/AppShell";
-import { AUTH_KEY } from "../types";
 import type { ServiceStatus } from "../types";
+import { api, ApiError } from "../utils/api";
 import { logger } from "../utils/logger";
+
+// Egyedi üzenet-ID-k — a Date.now() önmagában ütközhet gyors üzeneteknél.
+let msgSeq = 0;
+const nextMsgId = (prefix: string) => `${prefix}-${++msgSeq}-${Date.now()}`;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -216,7 +219,6 @@ const WELCOME: ChatMessage = {
 // ── ChatPage ──────────────────────────────────────────────────────────────────
 
 export default function ChatPage() {
-  const navigate = useNavigate();
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -232,37 +234,45 @@ export default function ChatPage() {
   useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
 
   useEffect(() => {
-    fetch("/health")
-      .then((r) => r.json())
+    let cancelled = false;
+    api<{ ollama?: boolean }>("/health")
       .then((d) => {
+        if (cancelled) return;
         const ok = !!d.ollama;
         setOllamaStatus(ok ? "online" : "offline");
         logger.info("service", `Ollama állapot: ${ok ? "online" : "offline"}`);
       })
-      .catch(() => setOllamaStatus("offline"));
+      .catch(() => { if (!cancelled) setOllamaStatus("offline"); });
+    return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    if (!localStorage.getItem(AUTH_KEY)) navigate("/login", { replace: true });
-  }, [navigate]);
-
   const handleAddMedia = useCallback(async (result: MediaResult) => {
-    const res = await fetch("/api/add", {
+    const data = await api<{ message?: string; job_id?: string | null }>("/api/add", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         media_type: result.media_type,
         external_id: result.external_id,
         title: result.title,
         tmdb_id: result.tmdb_id ?? null,
-        async_job: false,
+        async_job: true,
       }),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error((err as Record<string, string>).detail || `HTTP ${res.status}`);
+
+    if (data.job_id) {
+      // A hozzáadás a háttérben fut — pollozzuk a job státuszát (max ~2 perc).
+      for (let attempt = 0; attempt < 60; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const job = await api<{ status: string; message: string }>(`/api/jobs/${data.job_id}`);
+        if (job.status === "completed") {
+          logger.success("chat", job.message || `${result.title} hozzáadva`);
+          return;
+        }
+        if (job.status === "failed") {
+          throw new Error(job.message || "A hozzáadás nem sikerült.");
+        }
+      }
+      throw new Error("Időtúllépés: a hozzáadás túl sokáig tart.");
     }
-    const data = await res.json() as { message?: string };
     logger.success("chat", data.message || `${result.title} hozzáadva`);
   }, []);
 
@@ -271,33 +281,32 @@ export default function ChatPage() {
     if (!text || loading) return;
 
     const userMsg: ChatMessage = {
-      id: `user-${Date.now()}`,
+      id: nextMsgId("user"),
       role: "user",
       content: text,
       timestamp: new Date(),
     };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
+    // A textarea magassága visszaáll küldés után (a handleInput csak gépeléskor fut).
+    if (inputRef.current) inputRef.current.style.height = "auto";
     setLoading(true);
     logger.info("chat", `Üzenet: ${text.slice(0, 80)}${text.length > 80 ? "…" : ""}`);
 
     try {
-      const res = await fetch("/api/chat/agent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
-      });
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as {
+      const data = await api<{
         action: string;
         message: string;
         results?: MediaResult[];
         added?: AddedInfo;
-      };
+      }>("/api/chat/agent", {
+        method: "POST",
+        body: JSON.stringify({ message: text }),
+        timeoutMs: 190_000, // az LLM válasz akár 3 percig is tarthat
+      });
 
       const aiMsg: ChatMessage = {
-        id: `ai-${Date.now()}`,
+        id: nextMsgId("ai"),
         role: "assistant",
         content: data.message ?? "Sajnos üres választ kaptam.",
         timestamp: new Date(),
@@ -312,9 +321,11 @@ export default function ChatPage() {
       setMessages((prev) => [
         ...prev,
         {
-          id: `err-${Date.now()}`,
+          id: nextMsgId("err"),
           role: "error",
-          content: "A backend nem érhető el. Ellenőrizd, hogy a szerver fut-e.",
+          content: err instanceof ApiError
+            ? `Hiba: ${err.message}`
+            : "A backend nem érhető el. Ellenőrizd, hogy a szerver fut-e.",
           timestamp: new Date(),
         },
       ]);
@@ -480,7 +491,7 @@ export default function ChatPage() {
                       display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2,
                     }}
                   >
-                    <svg className="w-4 h-4 text-blue-600 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                    <svg className="w-4 h-4 text-gray-700 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>

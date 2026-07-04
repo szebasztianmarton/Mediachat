@@ -1,19 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import AppShell from "../components/AppShell";
-import { getUsers, addUser, deleteUser, updateUserPassword } from "../utils/users";
+import { api, ApiError } from "../utils/api";
+import { getAuth } from "../utils/auth";
 import { logger } from "../utils/logger";
-import { AUTH_KEY } from "../types";
-import type { User, UserRole, AuthData } from "../types";
-
-function getCurrentUserId(): string | null {
-  try {
-    const raw = localStorage.getItem(AUTH_KEY);
-    if (!raw) return null;
-    return (JSON.parse(raw) as AuthData).userId;
-  } catch {
-    return null;
-  }
-}
+import type { ApiUser, UserRole } from "../types";
 
 const roleLabel: Record<UserRole, string> = {
   admin: "Admin",
@@ -26,8 +16,9 @@ const roleBadge: Record<UserRole, string> = {
 };
 
 export default function UsersPage() {
-  const currentUserId = getCurrentUserId();
-  const [users, setUsers] = useState<User[]>([]);
+  const currentUserId = getAuth()?.userId ?? null;
+  const [users, setUsers] = useState<ApiUser[]>([]);
+  const [loadError, setLoadError] = useState("");
   const [form, setForm] = useState({ username: "", password: "", role: "user" as UserRole });
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
@@ -37,16 +28,32 @@ export default function UsersPage() {
   const [showPass, setShowPass] = useState<Record<string, boolean>>({});
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
-  function reload() { setUsers(getUsers()); }
-  useEffect(() => { reload(); }, []);
+  const reload = useCallback(async () => {
+    try {
+      const data = await api<{ users: ApiUser[] }>("/api/users");
+      setUsers(data.users);
+      setLoadError("");
+    } catch (err) {
+      setLoadError(err instanceof ApiError ? err.message : "A felhasználók betöltése nem sikerült.");
+    }
+  }, []);
 
-  function handleAdd(e: React.FormEvent) {
+  useEffect(() => { reload(); }, [reload]);
+
+  async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");
     if (!form.username.trim()) { setFormError("A felhasználónév nem lehet üres."); return; }
-    if (!form.password)        { setFormError("A jelszó nem lehet üres."); return; }
-    const result = addUser(form.username, form.password, form.role);
-    if (!result.ok) { setFormError(result.error); return; }
+    if (form.password.length < 4) { setFormError("A jelszó legalább 4 karakter legyen."); return; }
+    try {
+      await api<ApiUser>("/api/users", {
+        method: "POST",
+        body: JSON.stringify(form),
+      });
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : "A létrehozás nem sikerült.");
+      return;
+    }
     logger.success("users", `Új felhasználó létrehozva: ${form.username} (${form.role})`);
     setForm({ username: "", password: "", role: "user" });
     setFormSuccess("Felhasználó sikeresen létrehozva!");
@@ -55,27 +62,39 @@ export default function UsersPage() {
     reload();
   }
 
-  function handleDelete(user: User) {
+  async function handleDelete(user: ApiUser) {
     if (deleteConfirm !== user.id) {
       setDeleteConfirm(user.id);
       setTimeout(() => setDeleteConfirm(null), 3000);
       return;
     }
-    deleteUser(user.id);
-    logger.warn("users", `Felhasználó törölve: ${user.username}`);
+    try {
+      await api(`/api/users/${user.id}`, { method: "DELETE" });
+      logger.warn("users", `Felhasználó törölve: ${user.username}`);
+    } catch (err) {
+      setLoadError(err instanceof ApiError ? err.message : "A törlés nem sikerült.");
+    }
     setDeleteConfirm(null);
     reload();
   }
 
-  function handlePasswordSave(user: User) {
-    if (!newPass) return;
-    updateUserPassword(user.id, newPass);
-    logger.success("users", `Jelszó megváltoztatva: ${user.username}`);
+  async function handlePasswordSave(user: ApiUser) {
+    if (newPass.length < 4) return;
+    try {
+      await api(`/api/users/${user.id}/password`, {
+        method: "PUT",
+        body: JSON.stringify({ password: newPass }),
+      });
+      logger.success("users", `Jelszó megváltoztatva: ${user.username}`);
+    } catch (err) {
+      setLoadError(err instanceof ApiError ? err.message : "A jelszócsere nem sikerült.");
+    }
     setEditingId(null);
     setNewPass("");
   }
 
-  function formatDate(iso: string): string {
+  function formatDate(iso: string | null): string {
+    if (!iso) return "—";
     try {
       return new Date(iso).toLocaleDateString("hu-HU", { year: "numeric", month: "short", day: "numeric" });
     } catch { return iso; }
@@ -103,6 +122,12 @@ export default function UsersPage() {
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto" style={{ padding: 24 }}>
+
+        {loadError && (
+          <div className="card mb-6" style={{ padding: "12px 16px", borderColor: "#D8D8D8", background: "#F5F5F5" }}>
+            <p className="text-xs text-gray-700">{loadError}</p>
+          </div>
+        )}
 
         {/* Add user form */}
         {addingUser && (
@@ -244,12 +269,12 @@ export default function UsersPage() {
                           color: "#000000",
                         }}
                       >
-                        {user.username[0].toUpperCase()}
+                        {(user.username ?? user.display_name)[0]?.toUpperCase() ?? "?"}
                       </div>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                           <span className="text-sm font-semibold text-gray-900" style={{ letterSpacing: "-0.01em" }}>
-                            {user.username}
+                            {user.username ?? user.display_name}
                           </span>
                           {user.id === currentUserId && (
                             <span className="badge badge-gray" style={{ fontSize: 10 }}>te</span>
@@ -259,7 +284,7 @@ export default function UsersPage() {
                           </span>
                         </div>
                         <p className="text-xs text-gray-400 mt-0.5">
-                          Létrehozva: {formatDate(user.createdAt)} · ID: <code style={{ fontFamily: "monospace", fontSize: 11 }}>{user.id}</code>
+                          Létrehozva: {formatDate(user.created_at)} · ID: <code style={{ fontFamily: "monospace", fontSize: 11 }}>{user.id.slice(0, 8)}</code>
                         </p>
                       </div>
                     </div>
@@ -284,46 +309,53 @@ export default function UsersPage() {
 
                   {/* Inline password edit */}
                   {editingId === user.id && (
-                    <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
-                      <div style={{ position: "relative", flex: 1, maxWidth: 280 }}>
-                        <input
-                          type={showPass[user.id] ? "text" : "password"}
-                          value={newPass}
-                          onChange={(e) => setNewPass(e.target.value)}
-                          placeholder="Új jelszó..."
-                          className="input"
-                          style={{ paddingRight: 36 }}
-                          autoComplete="new-password"
-                        />
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ position: "relative", flex: 1, maxWidth: 280 }}>
+                          <input
+                            type={showPass[user.id] ? "text" : "password"}
+                            value={newPass}
+                            onChange={(e) => setNewPass(e.target.value)}
+                            placeholder="Új jelszó (min. 4 karakter)..."
+                            className="input"
+                            style={{ paddingRight: 36 }}
+                            autoComplete="new-password"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPass((s) => ({ ...s, [user.id]: !s[user.id] }))}
+                            style={{
+                              position: "absolute", inset: 0, left: "auto", right: 0,
+                              width: 34, display: "flex", alignItems: "center", justifyContent: "center",
+                              background: "none", border: "none", cursor: "pointer", color: "#9ca3af",
+                            }}
+                            aria-label={showPass[user.id] ? "Elrejtés" : "Megjelenítés"}
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                          </button>
+                        </div>
                         <button
-                          type="button"
-                          onClick={() => setShowPass((s) => ({ ...s, [user.id]: !s[user.id] }))}
-                          style={{
-                            position: "absolute", inset: 0, left: "auto", right: 0,
-                            width: 34, display: "flex", alignItems: "center", justifyContent: "center",
-                            background: "none", border: "none", cursor: "pointer", color: "#9ca3af",
-                          }}
-                          aria-label={showPass[user.id] ? "Elrejtés" : "Megjelenítés"}
+                          onClick={() => handlePasswordSave(user)}
+                          disabled={newPass.length < 4}
+                          className="btn btn-primary btn-sm"
                         >
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24" aria-hidden="true">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          </svg>
+                          Mentés
+                        </button>
+                        <button
+                          onClick={() => setEditingId(null)}
+                          className="btn btn-secondary btn-sm"
+                        >
+                          Mégse
                         </button>
                       </div>
-                      <button
-                        onClick={() => handlePasswordSave(user)}
-                        disabled={!newPass}
-                        className="btn btn-primary btn-sm"
-                      >
-                        Mentés
-                      </button>
-                      <button
-                        onClick={() => setEditingId(null)}
-                        className="btn btn-secondary btn-sm"
-                      >
-                        Mégse
-                      </button>
+                      {user.id === currentUserId && (
+                        <p className="text-xs text-gray-400 mt-1.5">
+                          A saját jelszavad módosítása után újra be kell jelentkezned.
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -333,7 +365,7 @@ export default function UsersPage() {
         </div>
 
         <p className="text-center text-xs text-gray-400 mt-6">
-          Felhasználók a böngésző localStorage-ban tárolódnak.
+          A felhasználók a szerveren tárolódnak, hash-elt jelszóval.
         </p>
       </div>
     </AppShell>

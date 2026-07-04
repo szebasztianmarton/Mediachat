@@ -1,19 +1,9 @@
 import { useState, useEffect } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { AUTH_KEY } from "../types";
-import type { AuthData } from "../types";
+import { api } from "../utils/api";
+import { clearAuth, getAuth } from "../utils/auth";
 import { getTheme, toggleTheme } from "../utils/theme";
 import type { Theme } from "../utils/theme";
-
-function getAuth(): AuthData | null {
-  try {
-    const raw = localStorage.getItem(AUTH_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as AuthData;
-  } catch {
-    return null;
-  }
-}
 
 interface NavItemDef {
   label: string;
@@ -29,9 +19,20 @@ const NAV_ITEMS: NavItemDef[] = [
     icon: "M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z",
   },
   {
+    label: "Ajánlások",
+    href: "/recommendations",
+    icon: "M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.563.563 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z",
+  },
+  {
     label: "Dashboard",
     href: "/dashboard",
     icon: "M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z",
+    adminOnly: true,
+  },
+  {
+    label: "Tárhely",
+    href: "/storage",
+    icon: "M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4",
     adminOnly: true,
   },
   {
@@ -115,7 +116,9 @@ export default function Sidebar() {
   }
 
   function handleLogout() {
-    localStorage.removeItem(AUTH_KEY);
+    // A szerveroldali session visszavonása — ha nem sikerül, akkor is kilépünk.
+    api("/api/auth/logout", { method: "POST", body: JSON.stringify({}) }).catch(() => {});
+    clearAuth();
     navigate("/login");
   }
 

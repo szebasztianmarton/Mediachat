@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AUTH_KEY } from "../types";
-import type { AuthData } from "../types";
-import { findUser } from "../utils/users";
+import type { ApiUser } from "../types";
+import { api, ApiError } from "../utils/api";
+import { setAuth } from "../utils/auth";
 import { logger } from "../utils/logger";
 
 export default function LoginPage() {
@@ -17,24 +17,30 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 300));
-
-    const user = findUser(username, password);
-    if (user) {
-      const authData: AuthData = {
-        userId: user.id,
-        username: user.username,
-        role: user.role,
-      };
-      localStorage.setItem(AUTH_KEY, JSON.stringify(authData));
-      logger.success("auth", `Bejelentkezés sikeres: ${user.username} (${user.role})`);
-      navigate(user.role === "admin" ? "/dashboard" : "/chat");
-    } else {
+    try {
+      const data = await api<{ token: string; user: ApiUser }>("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
+      });
+      setAuth({
+        token: data.token,
+        userId: data.user.id,
+        username: data.user.username ?? data.user.display_name,
+        role: data.user.role,
+      });
+      logger.success("auth", `Bejelentkezés sikeres: ${data.user.username} (${data.user.role})`);
+      navigate(data.user.role === "admin" ? "/dashboard" : "/chat");
+    } catch (err) {
       logger.warn("auth", `Sikertelen belépési kísérlet: ${username || "(üres)"}`);
-      setError("Helytelen felhasználónév vagy jelszó.");
+      setError(
+        err instanceof ApiError && err.status === 401
+          ? "Helytelen felhasználónév vagy jelszó."
+          : "A szerver nem érhető el. Ellenőrizd, hogy a backend fut-e."
+      );
       setPassword("");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   return (
@@ -56,7 +62,6 @@ export default function LoginPage() {
               alignItems: "center",
               justifyContent: "center",
               marginBottom: 16,
-              boxShadow: "0 4px 14px rgba(0,0,0,0.20)",
             }}
           >
             <svg width="24" height="24" fill="none" stroke="white" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
@@ -221,7 +226,10 @@ export default function LoginPage() {
             }}
           >
             <p style={{ fontSize: 12, color: "#9ca3af" }}>
-              Demo: <code style={{ fontFamily: "monospace", color: "#333333", background: "#F0F0F0", padding: "1px 5px", borderRadius: 4 }}>admin / media2024</code>
+              Alapértelmezett: <code style={{ fontFamily: "monospace", color: "#333333", background: "#F0F0F0", padding: "1px 5px", borderRadius: 4 }}>admin / media2024</code>
+            </p>
+            <p style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
+              (ADMIN_USERNAME / ADMIN_PASSWORD env-változóval módosítható)
             </p>
           </div>
         </div>

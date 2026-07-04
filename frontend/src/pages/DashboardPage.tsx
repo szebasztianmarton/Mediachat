@@ -4,6 +4,7 @@ import AppShell from "../components/AppShell";
 import { useServiceStatus } from "../hooks/useServiceStatus";
 import ServiceCard from "../components/ServiceCard";
 import StatusBadge from "../components/StatusBadge";
+import { api } from "../utils/api";
 import { logger } from "../utils/logger";
 
 // ── Now Playing ──────────────────────────────────────────────────────────────
@@ -28,13 +29,11 @@ function NowPlayingWidget() {
     let cancelled = false;
     async function load() {
       try {
-        const res = await fetch("/api/media/sessions");
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+        const data = await api<{ sessions?: MediaSession[] }>("/api/media/sessions");
         if (!cancelled) {
           setSessions(data.sessions ?? []);
           if ((data.sessions ?? []).length > 0) {
-            logger.info("media", `${data.sessions.length} aktív média lejátszás`);
+            logger.info("media", `${(data.sessions ?? []).length} aktív média lejátszás`);
           }
         }
       } catch {
@@ -175,9 +174,7 @@ function TorrentWidget() {
     let cancelled = false;
     async function load() {
       try {
-        const res = await fetch("/api/torrents");
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+        const data = await api<{ torrents?: TorrentItem[] }>("/api/torrents");
         if (!cancelled) setTorrents(data.torrents ?? []);
       } catch {
         if (!cancelled) setError("Torrent kliens nincs konfigurálva");

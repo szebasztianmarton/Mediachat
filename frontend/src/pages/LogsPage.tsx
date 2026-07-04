@@ -71,10 +71,20 @@ function formatDate(iso: string): string {
 
 function LogRow({ entry }: { entry: LogEntry }) {
   const [expanded, setExpanded] = useState(false);
+  const toggle = () => entry.detail && setExpanded((e) => !e);
   return (
     <div
       className={`rounded-md px-3 py-2 text-xs ${levelColors[entry.level]} ${entry.detail ? "cursor-pointer" : ""}`}
-      onClick={() => entry.detail && setExpanded((e) => !e)}
+      onClick={toggle}
+      role={entry.detail ? "button" : undefined}
+      tabIndex={entry.detail ? 0 : undefined}
+      aria-expanded={entry.detail ? expanded : undefined}
+      onKeyDown={(e) => {
+        if (entry.detail && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          toggle();
+        }
+      }}
     >
       <div className="flex items-start gap-2">
         <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${levelDot[entry.level]}`} />

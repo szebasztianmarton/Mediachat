@@ -64,7 +64,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: () => void 
         borderRadius: 999,
         border: "none",
         background: checked ? "#000000" : "#E0E0E0",
-        transition: "background 0.15s",
+        transition: "none",
         padding: 0,
       }}
     >
@@ -77,8 +77,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: () => void 
           height: 16,
           borderRadius: 999,
           background: "#fff",
-          boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-          transition: "left 0.15s",
+          transition: "none",
         }}
       />
     </button>
@@ -320,7 +319,7 @@ function GroupHeader({ title, iconPath }: { title: string; iconPath: string }) {
         </svg>
       </div>
       <h2 className="text-sm font-semibold text-gray-900" style={{ letterSpacing: "-0.01em" }}>{title}</h2>
-      <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
+      <div style={{ flex: 1, height: 1, background: "#E0E0E0" }} />
     </div>
   );
 }
@@ -360,6 +359,14 @@ function enabledKey(key: ServiceKey): keyof AppSettings {
   return `${key}Enabled` as keyof AppSettings;
 }
 
+// A backend /health végpontja csak ezeket a szolgáltatásokat ellenőrzi.
+const HEALTH_TESTABLE: Partial<Record<ServiceKey, string>> = {
+  sonarr: "sonarr",
+  radarr: "radarr",
+  ollama: "ollama",
+  tmdb: "tmdb",
+};
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [saved, setSaved] = useState(false);
@@ -388,6 +395,20 @@ export default function SettingsPage() {
   }
 
   const testService = useCallback(async (key: ServiceKey) => {
+    // A backend /health lapos objektumot ad vissza, és csak ezeket ismeri.
+    const healthField = HEALTH_TESTABLE[key];
+    if (!healthField) {
+      setResults((p) => ({
+        ...p,
+        [key]: {
+          state: "unconfigured",
+          error: "Ezt a szolgáltatást a backend nem ellenőrzi — a konfiguráció a szerver .env fájljában történik.",
+        },
+      }));
+      logger.info("service", `${SERVICE_LABELS[key]}: backendből nem tesztelhető`);
+      return;
+    }
+
     setTesting((p) => ({ ...p, [key]: true }));
     setResults((p) => ({ ...p, [key]: { state: "checking" } }));
     logger.info("service", `Kapcsolat tesztelése: ${SERVICE_LABELS[key]}`);
@@ -397,11 +418,16 @@ export default function SettingsPage() {
       const res = await fetch("/health");
       const latencyMs = Math.round(performance.now() - t0);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const ok: boolean = !!data.checks?.[key];
+      const data = (await res.json()) as Record<string, boolean | string | null>;
+      const ok = !!data[healthField];
+      const errField = data[`${healthField}_error`];
       setResults((p) => ({
         ...p,
-        [key]: { state: ok ? "online" : "offline", latencyMs: ok ? latencyMs : undefined, error: ok ? undefined : "A szolgáltatás nem érhető el" },
+        [key]: {
+          state: ok ? "online" : "offline",
+          latencyMs: ok ? latencyMs : undefined,
+          error: ok ? undefined : (typeof errField === "string" ? errField : "A szolgáltatás nem érhető el"),
+        },
       }));
       logger[ok ? "success" : "warn"]("service", `${SERVICE_LABELS[key]}: ${ok ? "online" : "offline"}`);
     } catch (e) {
@@ -454,6 +480,15 @@ export default function SettingsPage() {
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto" style={{ padding: 24 }}>
+
+        {/* Figyelmeztetés: a tényleges szerverkonfiguráció env-alapú */}
+        <div className="card mb-6" style={{ padding: "12px 16px", background: "#F5F5F5", borderColor: "#D8D8D8" }}>
+          <p className="text-xs text-gray-700">
+            A szolgáltatások tényleges konfigurációja (URL-ek, API kulcsok) a backend <code style={{ fontFamily: "monospace" }}>.env</code> fájljában
+            történik — az itt megadott értékek csak ebben a böngészőben tárolódnak, és nem befolyásolják a szervert.
+            A „Kapcsolat tesztelése" gomb a backend által látott állapotot mutatja.
+          </p>
+        </div>
 
         {/* Health summary */}
         <div className="card mb-6" style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
