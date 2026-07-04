@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import AppShell from "../components/AppShell";
 import type { ServiceStatus } from "../types";
 import { api, ApiError } from "../utils/api";
+import { clearAuth, getAuth } from "../utils/auth";
 import { logger } from "../utils/logger";
 
 // Egyedi üzenet-ID-k — a Date.now() önmagában ütközhet gyors üzeneteknél.
@@ -293,33 +294,112 @@ export default function ChatPage() {
     setLoading(true);
     logger.info("chat", `Üzenet: ${text.slice(0, 80)}${text.length > 80 ? "…" : ""}`);
 
+    const aiId = nextMsgId("ai");
+    let started = false;
+    const ensureAiMessage = () => {
+      if (started) return;
+      started = true;
+      setLoading(false); // az első tokentől a növekvő üzenet a visszajelzés
+      setMessages((prev) => [
+        ...prev,
+        { id: aiId, role: "assistant", content: "", timestamp: new Date(), action: "chat" },
+      ]);
+    };
+
     try {
-      const data = await api<{
-        action: string;
-        message: string;
-        results?: MediaResult[];
-        added?: AddedInfo;
-      }>("/api/chat/agent", {
+      const auth = getAuth();
+      const res = await fetch("/api/chat/agent/stream", {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(auth?.token ? { "X-Session-Token": auth.token } : {}),
+        },
         body: JSON.stringify({ message: text }),
-        timeoutMs: 190_000, // az LLM válasz akár 3 percig is tarthat
       });
 
-      const aiMsg: ChatMessage = {
-        id: nextMsgId("ai"),
-        role: "assistant",
-        content: data.message ?? "Sajnos üres választ kaptam.",
-        timestamp: new Date(),
-        action: data.action as ChatMessage["action"],
-        results: data.results ?? undefined,
-        added: data.added ?? undefined,
-      };
-      setMessages((prev) => [...prev, aiMsg]);
-      logger.success("chat", `Válasz: action=${data.action}, results=${data.results?.length ?? 0}`);
+      if (res.status === 401) {
+        clearAuth();
+        window.location.href = "/login";
+        return;
+      }
+      if (!res.ok || !res.body) {
+        const body = (await res.json().catch(() => ({}))) as { detail?: string };
+        throw new ApiError(body.detail || `HTTP ${res.status}`, res.status);
+      }
+
+      // SSE stream feldolgozása — a chat válasz tokenenként érkezik.
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let action: string | undefined;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+        for (const rawEvent of events) {
+          const line = rawEvent.trim();
+          if (!line.startsWith("data:")) continue;
+          let event: {
+            type: string;
+            content?: string;
+            message?: string;
+            payload?: { action: string; message: string; results?: MediaResult[]; added?: AddedInfo };
+          };
+          try {
+            event = JSON.parse(line.slice(5));
+          } catch {
+            continue;
+          }
+
+          if (event.type === "token" && event.content) {
+            ensureAiMessage();
+            setMessages((prev) =>
+              prev.map((m) => (m.id === aiId ? { ...m, content: m.content + event.content } : m))
+            );
+          } else if (event.type === "result" && event.payload) {
+            const p = event.payload;
+            action = p.action;
+            ensureAiMessage();
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === aiId
+                  ? {
+                      ...m,
+                      content: p.message ?? "Sajnos üres választ kaptam.",
+                      action: p.action as ChatMessage["action"],
+                      results: p.results ?? undefined,
+                      added: p.added ?? undefined,
+                    }
+                  : m
+              )
+            );
+          } else if (event.type === "error") {
+            ensureAiMessage();
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === aiId ? { ...m, role: "error" as const, content: event.message ?? "Hiba történt." } : m
+              )
+            );
+          }
+        }
+      }
+
+      // Ha a stream tokenek nélkül zárult (üres LLM válasz), ne maradjon üres buborék.
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === aiId && m.role === "assistant" && m.content === "" && !m.results && !m.added
+            ? { ...m, content: "Sajnos üres választ kaptam." }
+            : m
+        )
+      );
+      logger.success("chat", `Válasz kész (${action ?? "chat"})`);
     } catch (err) {
       const detail = err instanceof Error ? err.message : "Ismeretlen hiba";
       setMessages((prev) => [
-        ...prev,
+        ...prev.filter((m) => m.id !== aiId || m.content !== ""),
         {
           id: nextMsgId("err"),
           role: "error",

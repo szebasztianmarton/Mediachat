@@ -1,6 +1,6 @@
 # Mediachat — Fejlesztési terv és állapotjelentés
 
-*Utolsó frissítés: 2026-07-04*
+*Utolsó frissítés: 2026-07-04 (2. kör — P0 + P1 nagy része kész)*
 
 ---
 
@@ -44,6 +44,16 @@ A 2026. júliusi nagy javítási kör (3 commit: `b8a4a13` → `70de1ef` → `ba
 - Frontend: `tsc --noEmit` 0 hiba, production build OK
 - Új végpontok élőben tesztelve (a stale-lista valódi Radarr-adatot adott)
 
+### 2. kör (P0 + P1 tételek) — 2026-07-04
+- **Rate limiting**: login 5/perc/IP (429 + Retry-After), chat 20/perc/user — saját, függőségmentes csúszóablakos limiter
+- **Bot allowlist**: `TELEGRAM_ALLOWED_CHAT_IDS` és `DISCORD_ALLOWED_GUILD_IDS` env-változók; üresen figyelmeztető log
+- **qBittorrent integráció**: a `/api/torrents` valódi adatot ad (auth + állapot-mapping), a Dashboard widget él
+- **Plex/Jellyfin sessions**: a `/api/media/sessions` mindkét szerverből olvas, "Most nézi" widget él
+- **Streaming chat (SSE)**: `/api/chat/agent/stream` — chat intentnél token-stream, search/add intentnél result-esemény; a ChatPage folyamatosan írja ki a választ
+- **Tesztek**: 16 pytest (auth flow, RBAC, rate limit, unit) + 11 Vitest (api kliens, auth util) — mind zöld
+- **CI**: GitHub Actions workflow (frontend: typecheck+test+build; backend: pytest)
+- UI: `tabular-nums`, EB Garamond a Login címen, `configured:false` őszinte widget-üzenetek
+
 ---
 
 ## 2. Ismert hibaforrások és kockázatok
@@ -73,17 +83,17 @@ Amit a átvizsgálás feltárt, de **tudatosan még nincs javítva**:
 
 ### P0 — Biztonság és stabilitás (első kör)
 
-1. **Rate limiting** — `slowapi` a `/api/auth/login`-ra (pl. 5 kísérlet/perc/IP) és a chat végpontokra
-2. **Bot allowlist** — `TELEGRAM_ALLOWED_CHAT_IDS` és `DISCORD_ALLOWED_GUILD_IDS` env-változók; ismeretlen feladót a bot elutasít
-3. **Teszt-alapkészlet** — pytest: auth flow, search fallback, queue recovery; Vitest: api kliens, auth util, guard komponensek
-4. **CI** — GitHub Actions: `tsc + pnpm build + pytest` minden pushra (ha lesz remote)
-5. **Alembic** bevezetése a mini-migráció helyett
+1. ~~**Rate limiting**~~ ✅ KÉSZ — saját csúszóablakos limiter (login 5/perc/IP, chat 20/perc/user)
+2. ~~**Bot allowlist**~~ ✅ KÉSZ — `TELEGRAM_ALLOWED_CHAT_IDS` / `DISCORD_ALLOWED_GUILD_IDS`
+3. ~~**Teszt-alapkészlet**~~ ✅ KÉSZ — 16 pytest + 11 Vitest
+4. ~~**CI**~~ ✅ KÉSZ — `.github/workflows/ci.yml` (remote hozzáadásakor aktiválódik)
+5. **Alembic** bevezetése a mini-migráció helyett — *elhalasztva: a mini-migráció homelab méretben elég; akkor éri meg, ha oszlop-átnevezés/törlés is kell*
 
 ### P1 — Hiányzó magfunkciók
 
-6. **qBittorrent integráció** — a `/api/torrents` stub feltöltése valódi adattal (qBittorrent Web API), ezzel a Dashboard torrent-widget életre kel; opcionálisan sebesség/ETA/pause-resume
-7. **Plex/Jellyfin sessions** — a `/api/media/sessions` stub feltöltése (Plex `/status/sessions`, Jellyfin `/Sessions`), "Most nézi" widget élesítése
-8. **Streaming chat (SSE)** — az Ollama token-streamje végig a UI-ig; a mostani akár 3 perces néma várakozás helyett azonnal folyó szöveg. Ez a legnagyobb érzékelhető UX-ugrás.
+6. ~~**qBittorrent integráció**~~ ✅ KÉSZ — `/api/torrents` élesítve (auth, állapot-mapping); pause/resume még nincs
+7. ~~**Plex/Jellyfin sessions**~~ ✅ KÉSZ — `/api/media/sessions` mindkét forrásból
+8. ~~**Streaming chat (SSE)**~~ ✅ KÉSZ — `/api/chat/agent/stream` + folyamatosan íródó válasz a UI-ban
 9. **Chat előzmények perzisztálása** — beszélgetések DB-be mentése user-enként, beszélgetés-lista a chat oldalsávjában
 10. **Backend config API** — a Settings oldal tényleges összekötése a szerverrel: admin-védett `GET/PUT /api/config`, env-felülírások DB-ben tárolva, kliensek újrainicializálása mentéskor. (Amíg nincs, a Settings marad "megjelenítés + figyelmeztetés".)
 

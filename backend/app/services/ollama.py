@@ -77,6 +77,39 @@ class OllamaClient:
         content = (body.get("message") or {}).get("content") or ""
         return content.strip()
 
+    async def chat_stream(
+        self,
+        message: str,
+        system_prompt: str,
+        num_predict: int = 400,
+        timeout: float = 180.0,
+    ):
+        """Token-streamet ad vissza (async generátor) — SSE-hez."""
+        body = self._chat_body(system_prompt, message, num_predict)
+        body["stream"] = True
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", f"{self.base_url}/api/chat", json=body) as res:
+                    if res.status_code >= 400:
+                        raise OllamaError(f"HTTP {res.status_code}")
+                    async for line in res.aiter_lines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        chunk = (data.get("message") or {}).get("content") or ""
+                        if chunk:
+                            yield chunk
+                        if data.get("done"):
+                            return
+        except httpx.TimeoutException as exc:
+            raise OllamaTimeout(str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise OllamaUnavailable(str(exc)) from exc
+
     async def warmup(self) -> None:
         """Előmelegíti a modellt induláskor, hogy az első chat ne legyen lassú."""
         try:

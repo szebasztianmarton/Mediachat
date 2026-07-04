@@ -29,15 +29,20 @@ function NowPlayingWidget() {
     let cancelled = false;
     async function load() {
       try {
-        const data = await api<{ sessions?: MediaSession[] }>("/api/media/sessions");
+        const data = await api<{ sessions?: MediaSession[]; configured?: boolean }>("/api/media/sessions");
         if (!cancelled) {
-          setSessions(data.sessions ?? []);
-          if ((data.sessions ?? []).length > 0) {
-            logger.info("media", `${(data.sessions ?? []).length} aktív média lejátszás`);
+          if (data.configured === false) {
+            setError("Plex/Jellyfin integráció nincs konfigurálva (PLEX_URL / JELLYFIN_URL)");
+          } else {
+            setError(null);
+            setSessions(data.sessions ?? []);
+            if ((data.sessions ?? []).length > 0) {
+              logger.info("media", `${(data.sessions ?? []).length} aktív média lejátszás`);
+            }
           }
         }
       } catch {
-        if (!cancelled) setError("Plex/Jellyfin integráció nincs konfigurálva");
+        if (!cancelled) setError("A média sessionök nem érhetők el");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -174,10 +179,17 @@ function TorrentWidget() {
     let cancelled = false;
     async function load() {
       try {
-        const data = await api<{ torrents?: TorrentItem[] }>("/api/torrents");
-        if (!cancelled) setTorrents(data.torrents ?? []);
+        const data = await api<{ torrents?: TorrentItem[]; configured?: boolean }>("/api/torrents");
+        if (!cancelled) {
+          if (data.configured === false) {
+            setError("Torrent kliens nincs konfigurálva (QBITTORRENT_URL)");
+          } else {
+            setError(null);
+            setTorrents(data.torrents ?? []);
+          }
+        }
       } catch {
-        if (!cancelled) setError("Torrent kliens nincs konfigurálva");
+        if (!cancelled) setError("A qBittorrent nem érhető el");
       } finally {
         if (!cancelled) setLoading(false);
       }

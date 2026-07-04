@@ -14,6 +14,25 @@ logger = logging.getLogger(__name__)
 _CALLBACK_MAX_BYTES = 64
 
 
+def _allowed_chat_ids() -> set[int]:
+    raw = settings.telegram_allowed_chat_ids.strip()
+    if not raw:
+        return set()
+    ids: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if part.lstrip("-").isdigit():
+            ids.add(int(part))
+    return ids
+
+
+def _chat_allowed(chat_id: int | None) -> bool:
+    allowed = _allowed_chat_ids()
+    if not allowed:
+        return True  # nincs allowlist beállítva — minden chat engedélyezett
+    return chat_id is not None and chat_id in allowed
+
+
 def _truncate_bytes(text: str, max_bytes: int) -> str:
     if max_bytes <= 0:
         return ""
@@ -22,14 +41,21 @@ def _truncate_bytes(text: str, max_bytes: int) -> str:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message:
-        await update.message.reply_text(
-            "Szia! Írj egy film vagy sorozat címét, vagy írd le, mit keresel."
-        )
+    if update.message is None:
+        return
+    if not _chat_allowed(update.effective_chat.id if update.effective_chat else None):
+        logger.warning("Telegram: nem engedélyezett chat: %s", update.effective_chat)
+        return
+    await update.message.reply_text(
+        "Szia! Írj egy film vagy sorozat címét, vagy írd le, mit keresel."
+    )
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if state.app_state is None or update.message is None:
+        return
+    if not _chat_allowed(update.effective_chat.id if update.effective_chat else None):
+        logger.warning("Telegram: nem engedélyezett chat próbált keresni: %s", update.effective_chat)
         return
 
     query = update.message.text.strip()
@@ -62,6 +88,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def handle_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if state.app_state is None or update.callback_query is None:
+        return
+    if not _chat_allowed(update.effective_chat.id if update.effective_chat else None):
+        logger.warning("Telegram: nem engedélyezett chat próbált hozzáadni.")
         return
 
     query = update.callback_query
@@ -102,6 +131,11 @@ async def run_telegram_bot() -> None:
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
+    if not _allowed_chat_ids():
+        logger.warning(
+            "Telegram bot allowlist nélkül fut — bárki használhatja. "
+            "Állítsd be a TELEGRAM_ALLOWED_CHAT_IDS env-változót."
+        )
     logger.info("Telegram bot started")
     try:
         await asyncio.Event().wait()  # fut, amíg a lifespan le nem állítja a taskot

@@ -1,12 +1,14 @@
 import asyncio
+import json
 import logging
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import state
@@ -42,8 +44,11 @@ from app.models import (
     UsersResponse,
 )
 from app.services.cache import CacheService
+from app.services.media_sessions import MediaSessionsService
 from app.services.ollama import OllamaError, OllamaTimeout, OllamaUnavailable
+from app.services.qbittorrent import QbittorrentClient
 from app.services.queue import QueueService
+from app.services.ratelimit import RateLimiter
 from app.services.recommendations import RecommendationService
 from app.services.search import SearchService
 from app.services.session import SessionService
@@ -53,6 +58,14 @@ from app.state import AppState
 logger = logging.getLogger(__name__)
 
 _NOT_READY = HTTPException(status_code=503, detail="A szerver még nem áll készen.")
+
+# Brute-force és LLM erőforrás-kimerítés elleni védelem (folyamatonkénti ablakok).
+login_limiter = RateLimiter(max_requests=5, window_seconds=60.0)
+chat_limiter = RateLimiter(max_requests=20, window_seconds=60.0)
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
 
 
 def _state() -> AppState:
@@ -88,6 +101,8 @@ async def lifespan(app: FastAPI):
         recommendations=recommendations,
         storage=storage,
         session=session_service,
+        torrents=QbittorrentClient(),
+        media=MediaSessionsService(),
     )
 
     await init_db()
@@ -178,8 +193,19 @@ async def health() -> HealthResponse:
 
 
 @app.post("/api/auth/login", response_model=LoginResponse)
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> LoginResponse:
+async def login(
+    payload: LoginRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> LoginResponse:
     st = _state()
+    ip = _client_ip(request)
+    if not login_limiter.allow(ip):
+        raise HTTPException(
+            status_code=429,
+            detail="Túl sok bejelentkezési kísérlet. Próbáld újra kicsit később.",
+            headers={"Retry-After": str(login_limiter.retry_after_seconds(ip))},
+        )
     auth = await st.session.authenticate(db, payload.username, payload.password)
     if auth is None:
         raise HTTPException(status_code=401, detail="Hibás felhasználónév vagy jelszó.")
@@ -391,17 +417,28 @@ async def submit_feedback(
     return {"success": True}
 
 
-# ── Dashboard stubok ─────────────────────────────────────────────────────────
+# ── Dashboard: média sessionök + torrentek ───────────────────────────────────
 
 
 @app.get("/api/media/sessions")
 async def media_sessions(_: UserSession = Depends(get_required_session)) -> dict:
-    return {"sessions": []}
+    st = _state()
+    if not st.media.configured:
+        return {"sessions": [], "configured": False}
+    sessions = await st.media.list_sessions()
+    return {"sessions": sessions, "configured": True}
 
 
 @app.get("/api/torrents")
 async def torrents(_: UserSession = Depends(get_required_session)) -> dict:
-    return {"torrents": []}
+    st = _state()
+    if not st.torrents.configured:
+        return {"torrents": [], "configured": False}
+    try:
+        items = await st.torrents.list_torrents()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"qBittorrent nem érhető el: {exc}") from exc
+    return {"torrents": items, "configured": True}
 
 
 # ── Storage (admin) ──────────────────────────────────────────────────────────
@@ -632,88 +669,162 @@ async def _ollama_reply(message: str, fallback_prompt: str) -> str:
         )
 
 
+async def _agent_search_add(
+    st: AppState,
+    message: str,
+    intent: Literal["add", "search"],
+) -> AgentChatResponse:
+    intent_data = await st.search.ollama.extract_search_intent(message)
+    query = " ".join(intent_data["search_terms"][:2]).strip() or message.strip()
+    logger.info("Agent | search query=%r", query)
+
+    try:
+        results, suggested_type, _mode = await st.search.search(query, "auto")
+    except (ValueError, RuntimeError) as exc:
+        logger.warning("Agent | search failed: %s", exc)
+        return AgentChatResponse(
+            action="chat",
+            message=f"Sajnos nem sikerült keresni: {exc}",
+        )
+
+    if not results:
+        return AgentChatResponse(
+            action="search",
+            message=f'Nem találtam semmit erre: „{query}".',
+            results=[],
+        )
+
+    if intent == "add":
+        best = results[0]
+        if best.match_score >= 0.45 or len(results) == 1:
+            try:
+                added_title, quality_note = await st.search.add(
+                    media_type=best.media_type,
+                    external_id=best.external_id,
+                    title=best.title,
+                    tmdb_id=best.tmdb_id,
+                )
+                type_label = "sorozat" if best.media_type == "series" else "film"
+                logger.info("Agent | added %r (%s)", added_title, type_label)
+                return AgentChatResponse(
+                    action="add",
+                    message=f'„{added_title}" sikeresen hozzáadva! ({type_label})',
+                    added=AgentMediaAdded(
+                        title=added_title,
+                        media_type=best.media_type,
+                        quality_note=quality_note,
+                    ),
+                )
+            except ValueError as exc:
+                logger.warning("Agent | auto-add failed: %s", exc)
+                return AgentChatResponse(
+                    action="search",
+                    message=f'Megtaláltam, de nem sikerült hozzáadni: {exc}\n\nVálassz egyet manuálisan:',
+                    results=results[:5],
+                )
+        return AgentChatResponse(
+            action="search",
+            message="Több találat is van. Melyiket adjam hozzá?",
+            results=results[:5],
+        )
+
+    type_label = {"movie": "film", "series": "sorozat"}.get(suggested_type or "", "tartalom")
+    count = len(results)
+    return AgentChatResponse(
+        action="search",
+        message=f'{count} találat. A legjobb találat egy {type_label}:',
+        results=results[:5],
+    )
+
+
 @app.post("/api/chat/agent", response_model=AgentChatResponse)
 async def chat_agent(
     payload: AgentChatRequest,
-    _: UserSession = Depends(get_required_session),
+    session: UserSession = Depends(get_required_session),
 ) -> AgentChatResponse:
     st = _state()
+    if not chat_limiter.allow(session.user_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Túl sok üzenet rövid idő alatt. Várj egy percet.",
+        )
 
     intent = _detect_intent(payload.message)
     logger.info("Agent | intent=%s | msg=%r", intent, payload.message[:80])
 
     if intent in ("search", "add"):
-        intent_data = await st.search.ollama.extract_search_intent(payload.message)
-        query = " ".join(intent_data["search_terms"][:2]).strip() or payload.message.strip()
-        logger.info("Agent | search query=%r", query)
-
-        try:
-            results, suggested_type, _mode = await st.search.search(query, "auto")
-        except (ValueError, RuntimeError) as exc:
-            logger.warning("Agent | search failed: %s", exc)
-            return AgentChatResponse(
-                action="chat",
-                message=f"Sajnos nem sikerült keresni: {exc}",
-            )
-
-        if not results:
-            return AgentChatResponse(
-                action="search",
-                message=f'Nem találtam semmit erre: „{query}".',
-                results=[],
-            )
-
-        if intent == "add":
-            best = results[0]
-            if best.match_score >= 0.45 or len(results) == 1:
-                try:
-                    added_title, quality_note = await st.search.add(
-                        media_type=best.media_type,
-                        external_id=best.external_id,
-                        title=best.title,
-                        tmdb_id=best.tmdb_id,
-                    )
-                    type_label = "sorozat" if best.media_type == "series" else "film"
-                    logger.info("Agent | added %r (%s)", added_title, type_label)
-                    return AgentChatResponse(
-                        action="add",
-                        message=f'„{added_title}" sikeresen hozzáadva! ({type_label})',
-                        added=AgentMediaAdded(
-                            title=added_title,
-                            media_type=best.media_type,
-                            quality_note=quality_note,
-                        ),
-                    )
-                except ValueError as exc:
-                    logger.warning("Agent | auto-add failed: %s", exc)
-                    return AgentChatResponse(
-                        action="search",
-                        message=f'Megtaláltam, de nem sikerült hozzáadni: {exc}\n\nVálassz egyet manuálisan:',
-                        results=results[:5],
-                    )
-            return AgentChatResponse(
-                action="search",
-                message="Több találat is van. Melyiket adjam hozzá?",
-                results=results[:5],
-            )
-
-        type_label = {"movie": "film", "series": "sorozat"}.get(suggested_type or "", "tartalom")
-        count = len(results)
-        return AgentChatResponse(
-            action="search",
-            message=f'{count} találat. A legjobb találat egy {type_label}:',
-            results=results[:5],
-        )
+        return await _agent_search_add(st, payload.message, intent)
 
     # intent == "chat" → Ollama szabad válasz
     reply = await _ollama_reply(payload.message, DEFAULT_AGENT_PROMPT)
     return AgentChatResponse(action="chat", message=reply)
 
 
+@app.post("/api/chat/agent/stream")
+async def chat_agent_stream(
+    payload: AgentChatRequest,
+    session: UserSession = Depends(get_required_session),
+) -> StreamingResponse:
+    """SSE változat: chat intentnél token-streamet ad, search/add intentnél
+    egyetlen `result` eseményben a teljes AgentChatResponse-t."""
+    st = _state()
+    if not chat_limiter.allow(session.user_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Túl sok üzenet rövid idő alatt. Várj egy percet.",
+        )
+
+    intent = _detect_intent(payload.message)
+    logger.info("Agent(stream) | intent=%s | msg=%r", intent, payload.message[:80])
+
+    def sse(obj: dict) -> str:
+        return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+    async def event_generator():
+        try:
+            if intent in ("search", "add"):
+                result = await _agent_search_add(st, payload.message, intent)
+                yield sse({"type": "result", "payload": result.model_dump()})
+            else:
+                training_ctx = await _load_training_context()
+                system_prompt = training_ctx if training_ctx else DEFAULT_AGENT_PROMPT
+                try:
+                    async for chunk in st.search.ollama.chat_stream(payload.message, system_prompt):
+                        yield sse({"type": "token", "content": chunk})
+                except OllamaTimeout:
+                    yield sse({
+                        "type": "error",
+                        "message": "Az Ollama túl lassan válaszolt (időtúllépés). Próbálj rövidebb kérdést, vagy egy kisebb modellt.",
+                    })
+                except OllamaUnavailable:
+                    yield sse({"type": "error", "message": "A chat nem érhető el. Ellenőrizd, hogy az Ollama fut-e."})
+                except OllamaError:
+                    yield sse({
+                        "type": "error",
+                        "message": "Az Ollama szerver hibát adott. Ellenőrizd, hogy a beállított modell "
+                        f"('{settings.ollama_model}') létezik-e a szerveren.",
+                    })
+        except Exception:  # noqa: BLE001
+            logger.exception("Agent stream hiba")
+            yield sse({"type": "error", "message": "Váratlan hiba történt a válasz közben."})
+        yield sse({"type": "done"})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(
     payload: ChatRequest,
-    _: UserSession = Depends(get_required_session),
+    session: UserSession = Depends(get_required_session),
 ) -> ChatResponse:
+    if not chat_limiter.allow(session.user_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Túl sok üzenet rövid idő alatt. Várj egy percet.",
+        )
     reply = await _ollama_reply(payload.message, DEFAULT_CHAT_PROMPT)
     return ChatResponse(response=reply)

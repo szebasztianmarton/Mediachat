@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 
 from app.services.cache import CacheService
+from app.services.media_sessions import MediaSessionsService
+from app.services.qbittorrent import QbittorrentClient
 from app.services.queue import QueueService
 from app.services.recommendations import RecommendationService
 from app.services.search import SearchService
@@ -16,6 +18,8 @@ class AppState:
     recommendations: RecommendationService
     storage: StorageService
     session: SessionService
+    torrents: QbittorrentClient
+    media: MediaSessionsService
 
 
 app_state: AppState | None = None

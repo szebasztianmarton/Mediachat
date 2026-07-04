@@ -70,10 +70,11 @@ export default function LoginPage() {
           </div>
           <h1
             style={{
-              fontSize: 20,
-              fontWeight: 700,
+              fontFamily: "'EB Garamond', Georgia, serif",
+              fontSize: 24,
+              fontWeight: 600,
               color: "#000000",
-              letterSpacing: "-0.03em",
+              letterSpacing: "-0.01em",
               margin: 0,
               lineHeight: 1.2,
             }}

@@ -52,9 +52,24 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = ""
     telegram_enabled: bool = False
+    # Vesszővel elválasztott chat ID-k; üresen hagyva mindenki írhat a botnak.
+    telegram_allowed_chat_ids: str = ""
 
     discord_bot_token: str = ""
     discord_enabled: bool = False
+    # Vesszővel elválasztott guild (szerver) ID-k; üresen hagyva minden szerver engedélyezett.
+    discord_allowed_guild_ids: str = ""
+
+    # Torrent kliens (qBittorrent Web API)
+    qbittorrent_url: str = ""
+    qbittorrent_username: str = ""
+    qbittorrent_password: str = ""
+
+    # Media szerverek ("Most nézi" widget)
+    plex_url: str = ""
+    plex_token: str = ""
+    jellyfin_url: str = ""
+    jellyfin_api_key: str = ""
 
 
 settings = Settings()
