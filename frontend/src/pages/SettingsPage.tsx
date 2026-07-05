@@ -19,6 +19,7 @@ const CONFIG_FIELD_MAP: Array<{ field: keyof AppSettings; key: string; secret: b
   { field: "torrentUrl", key: "torrent_url", secret: false },
   { field: "torrentUsername", key: "torrent_username", secret: false },
   { field: "torrentPassword", key: "torrent_password", secret: true },
+  { field: "torrentAutoDeleteHours", key: "torrent_auto_delete_hours", secret: false },
   { field: "plexUrl", key: "plex_url", secret: false },
   { field: "plexToken", key: "plex_token", secret: true },
   { field: "jellyfinUrl", key: "jellyfin_url", secret: false },
@@ -64,7 +65,7 @@ function StatusChip({ state, latencyMs }: { state: ConnectionState; latencyMs?: 
 // ── Summary dot ──────────────────────────────────────────────────────────────
 
 function SummaryDot({ state }: { state: ConnectionState }) {
-  const color = state === "online" ? "#000000" : state === "offline" ? "#888888" : state === "checking" ? "#AAAAAA" : "#D8D8D8";
+  const color = state === "online" ? "var(--ok)" : state === "offline" ? "var(--err)" : state === "checking" ? "var(--warn)" : "var(--border-strong)";
   return (
     <span
       style={{ width: 7, height: 7, borderRadius: 999, background: color, display: "inline-block", flexShrink: 0 }}
@@ -90,7 +91,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: () => void 
         cursor: "pointer",
         borderRadius: 999,
         border: "none",
-        background: checked ? "#000000" : "#E0E0E0",
+        background: checked ? "var(--primary-bg)" : "var(--surface-3)",
         transition: "none",
         padding: 0,
       }}
@@ -103,7 +104,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: () => void 
           width: 16,
           height: 16,
           borderRadius: 999,
-          background: "#fff",
+          background: "var(--surface)",
           transition: "none",
         }}
       />
@@ -143,7 +144,7 @@ function ServiceCard({
             width: 36,
             height: 36,
             borderRadius: 8,
-            background: "#F0F0F0",
+            background: "var(--surface-2)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -169,7 +170,7 @@ function ServiceCard({
 
       {/* Offline error */}
       {enabled && result.state === "offline" && result.error && (
-        <div style={{ margin: "0 14px 10px", padding: "7px 10px", background: "#F5F5F5", border: "1px solid #D8D8D8", borderRadius: 6, display: "flex", gap: 6, alignItems: "flex-start" }}>
+        <div style={{ margin: "0 14px 10px", padding: "7px 10px", background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 6, display: "flex", gap: 6, alignItems: "flex-start" }}>
           <svg className="w-3.5 h-3.5 shrink-0 text-gray-500 mt-0.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
             <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
           </svg>
@@ -179,7 +180,7 @@ function ServiceCard({
 
       {/* Expandable fields */}
       {enabled && expanded && (
-        <div style={{ borderTop: "1px solid #E8E8E8", padding: "12px 16px", background: "#F5F5F5", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ borderTop: "1px solid var(--border-2)", padding: "12px 16px", background: "var(--surface-2)", display: "flex", flexDirection: "column", gap: 10 }}>
           {children}
           <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 4 }}>
             <button
@@ -213,10 +214,10 @@ function ServiceCard({
             padding: "7px 0",
             width: "100%",
             fontSize: 11,
-            color: "#9ca3af",
+            color: "var(--ink-3)",
             background: "none",
             border: "none",
-            borderTop: "1px solid #f3f4f6",
+            borderTop: "1px solid var(--border-2)",
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
@@ -225,8 +226,8 @@ function ServiceCard({
             fontFamily: "inherit",
             transition: "none",
           }}
-          onMouseEnter={(e) => e.currentTarget.style.color = "#333333"}
-          onMouseLeave={(e) => e.currentTarget.style.color = "#9ca3af"}
+          onMouseEnter={(e) => e.currentTarget.style.color = "var(--ink)"}
+          onMouseLeave={(e) => e.currentTarget.style.color = "var(--ink-3)"}
         >
           {expanded ? (
             <>
@@ -297,7 +298,7 @@ function SegmentedControl<T extends string>({
   options: { value: T; label: string }[];
 }) {
   return (
-    <div style={{ display: "flex", border: "1px solid #E0E0E0", borderRadius: 6, overflow: "hidden" }}>
+    <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
       {options.map((opt, i) => (
         <button
           key={opt.value}
@@ -310,9 +311,9 @@ function SegmentedControl<T extends string>({
             fontWeight: 500,
             cursor: "pointer",
             border: "none",
-            borderLeft: i > 0 ? "1px solid #E0E0E0" : "none",
-            background: value === opt.value ? "#000000" : "#fff",
-            color: value === opt.value ? "#fff" : "#6b7280",
+            borderLeft: i > 0 ? "1px solid var(--border)" : "none",
+            background: value === opt.value ? "var(--primary-bg)" : "var(--surface)",
+            color: value === opt.value ? "var(--primary-ink)" : "var(--ink-3)",
             transition: "none",
             fontFamily: "inherit",
           }}
@@ -334,7 +335,7 @@ function GroupHeader({ title, iconPath }: { title: string; iconPath: string }) {
           width: 24,
           height: 24,
           borderRadius: 6,
-          background: "#F0F0F0",
+          background: "var(--surface-2)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -346,7 +347,7 @@ function GroupHeader({ title, iconPath }: { title: string; iconPath: string }) {
         </svg>
       </div>
       <h2 className="text-sm font-semibold text-gray-900" style={{ letterSpacing: "-0.01em" }}>{title}</h2>
-      <div style={{ flex: 1, height: 1, background: "#E0E0E0" }} />
+      <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
     </div>
   );
 }
@@ -561,7 +562,7 @@ export default function SettingsPage() {
       <div className="flex-1 overflow-y-auto" style={{ padding: 24 }}>
 
         {/* Info: mely szekciók mentődnek a szerverre */}
-        <div className="card mb-6" style={{ padding: "12px 16px", background: "#F5F5F5", borderColor: "#D8D8D8" }}>
+        <div className="card mb-6" style={{ padding: "12px 16px", background: "var(--surface-2)", borderColor: "var(--border)" }}>
           <p className="text-xs text-gray-700">
             A <strong>Sonarr, Radarr, Ollama, TMDB, Torrent, Plex és Jellyfin</strong> beállítások mentéskor a
             szerverre kerülnek és azonnal érvénybe lépnek (újraindításkor is megmaradnak, felülírják az <code style={{ fontFamily: "monospace" }}>.env</code>-et).
@@ -570,7 +571,7 @@ export default function SettingsPage() {
         </div>
 
         {saveError && (
-          <div className="card mb-6" style={{ padding: "12px 16px", background: "#F5F5F5", borderColor: "#B0B0B0" }}>
+          <div className="card mb-6" style={{ padding: "12px 16px", background: "var(--surface-2)", borderColor: "var(--border-strong)" }}>
             <p className="text-xs font-medium text-gray-800">⚠ {saveError}</p>
           </div>
         )}
@@ -579,7 +580,7 @@ export default function SettingsPage() {
         <div className="card mb-6" style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
             <span
-              style={{ width: 8, height: 8, borderRadius: 999, background: onlineCount > 0 ? "#000000" : "#D8D8D8", flexShrink: 0, display: "inline-block" }}
+              style={{ width: 8, height: 8, borderRadius: 999, background: onlineCount > 0 ? "var(--ok)" : "var(--border-strong)", flexShrink: 0, display: "inline-block" }}
             />
             <span className="text-sm font-semibold text-gray-900">{onlineCount} / {enabledCount} online</span>
             <span className="text-xs text-gray-400">({ALL_SERVICE_KEYS.length} szolgáltatás)</span>
@@ -659,6 +660,14 @@ export default function SettingsPage() {
               <Field label="Web UI URL" id="torrent-url" value={settings.torrentUrl} onChange={(v) => update("torrentUrl", v)} placeholder="http://localhost:8080" />
               <Field label="Felhasználónév" id="torrent-user" value={settings.torrentUsername} onChange={(v) => update("torrentUsername", v)} placeholder="admin" />
               <Field label="Jelszó" id="torrent-pass" value={settings.torrentPassword} onChange={(v) => update("torrentPassword", v)} placeholder={secretPlaceholder("torrent_password", "••••••••")} secret />
+              <Field
+                label="Automatikus törlés letöltés után (óra)"
+                id="torrent-autodelete"
+                value={settings.torrentAutoDeleteHours}
+                onChange={(v) => update("torrentAutoDeleteHours", v.replace(/[^0-9]/g, ""))}
+                placeholder="0"
+                helpText="A befejezett torrent ennyi óra után törlődik a kliensből (0 = kikapcsolva). Minden törlés a Tárhely oldal naplójában látható."
+              />
             </ServiceCard>
           </div>
         </section>

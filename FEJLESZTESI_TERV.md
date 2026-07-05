@@ -54,6 +54,14 @@ A 2026. júliusi nagy javítási kör (3 commit: `b8a4a13` → `70de1ef` → `ba
 - **CI**: GitHub Actions workflow (frontend: typecheck+test+build; backend: pytest)
 - UI: `tabular-nums`, EB Garamond a Login címen, `configured:false` őszinte widget-üzenetek
 
+### 4. kör (torrent auto-delete, témák, statisztika) — 2026-07-05
+- **Torrent auto-törlés**: befejezett letöltés N óra után automatikusan törlődik (10 percenkénti háttérciklus), minden törlés a `torrent_cleanup_log` táblába kerül; kézi törlés a Dashboard widgetből; visszaszámláló a torrent sorokon; napló a Tárhely oldalon; óra-beállítás a Settings Torrent kártyáján
+- **Téma-rendszer**: CSS-változós tokenek, 4 téma (E-ink, Sötét, 3D, Modern) — a sötét mód rendesen kidolgozva; témaválasztó popover a sidebarban
+- **Setup wizard**: első bejelentkezéskor témaválasztó képernyő élő előnézettel (userenként egyszer)
+- **Training**: súgó panel, MD-fájl feltöltés, formázó toolbar (B/I/H2/lista/kód), Szerkesztés/Osztott/Előnézet nézetek
+- **Settings**: valódi zöld/piros/sárga státuszjelzések (badge + pötty)
+- **Dashboard statisztika**: könyvtárméret (film/sorozat), torrentek, hozzáadások, felhasználók, beszélgetések + 14 napos hozzáadás-oszlopdiagram (`GET /api/stats`)
+
 ### 3. kör (P1 lezárása) — 2026-07-04
 - **Chat előzmények**: `conversations` + `conversation_messages` táblák, user-enkénti tulajdonjog-ellenőrzés; a stream végpont automatikusan létrehozza/folytatja a beszélgetést (`meta` esemény), a válaszok — találat-kártyákkal együtt — perzisztálódnak; ChatPage oldalsáv (új/megnyitás/törlés)
 - **Backend config API**: `config_overrides` tábla, admin-védett `GET/PUT /api/config`, induláskor betöltött felülírások, mentéskor azonnali kliens-újraépítés; titkok maszkolva (`****xxxx`), sosem utaznak vissza teljes értékkel

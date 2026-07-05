@@ -124,7 +124,7 @@ export default function UsersPage() {
       <div className="flex-1 overflow-y-auto" style={{ padding: 24 }}>
 
         {loadError && (
-          <div className="card mb-6" style={{ padding: "12px 16px", borderColor: "#D8D8D8", background: "#F5F5F5" }}>
+          <div className="card mb-6" style={{ padding: "12px 16px", borderColor: "var(--border)", background: "var(--surface-2)" }}>
             <p className="text-xs text-gray-700">{loadError}</p>
           </div>
         )}
@@ -174,7 +174,7 @@ export default function UsersPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1.5">Szerepkör</label>
-                  <div style={{ display: "flex", border: "1px solid #E0E0E0", borderRadius: 6, overflow: "hidden" }}>
+                  <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
                     {(["user", "admin"] as UserRole[]).map((r, i) => (
                       <button
                         key={r}
@@ -187,9 +187,9 @@ export default function UsersPage() {
                           fontWeight: 500,
                           cursor: "pointer",
                           border: "none",
-                          borderLeft: i > 0 ? "1px solid #E0E0E0" : "none",
-                          background: form.role === r ? "#000000" : "#fff",
-                          color: form.role === r ? "#fff" : "#6b7280",
+                          borderLeft: i > 0 ? "1px solid var(--border)" : "none",
+                          background: form.role === r ? "var(--primary-bg)" : "var(--surface)",
+                          color: form.role === r ? "var(--primary-ink)" : "var(--ink-3)",
                           transition: "none",
                           fontFamily: "inherit",
                         }}
@@ -247,7 +247,7 @@ export default function UsersPage() {
                   key={user.id}
                   style={{
                     padding: "14px 20px",
-                    borderTop: idx > 0 ? "1px solid #E8E8E8" : "none",
+                    borderTop: idx > 0 ? "1px solid var(--border-2)" : "none",
                   }}
                 >
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
@@ -258,15 +258,15 @@ export default function UsersPage() {
                           width: 36,
                           height: 36,
                           borderRadius: 999,
-                          background: "#F0F0F0",
-                          border: "1px solid #E0E0E0",
+                          background: "var(--surface-2)",
+                          border: "1px solid var(--border)",
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
                           flexShrink: 0,
                           fontSize: 13,
                           fontWeight: 600,
-                          color: "#000000",
+                          color: "var(--ink)",
                         }}
                       >
                         {(user.username ?? user.display_name)[0]?.toUpperCase() ?? "?"}
@@ -327,7 +327,7 @@ export default function UsersPage() {
                             style={{
                               position: "absolute", inset: 0, left: "auto", right: 0,
                               width: 34, display: "flex", alignItems: "center", justifyContent: "center",
-                              background: "none", border: "none", cursor: "pointer", color: "#9ca3af",
+                              background: "none", border: "none", cursor: "pointer", color: "var(--ink-3)",
                             }}
                             aria-label={showPass[user.id] ? "Elrejtés" : "Megjelenítés"}
                           >

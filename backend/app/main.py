@@ -60,7 +60,8 @@ from app.services.radarr import RadarrClient
 from app.services.ratelimit import RateLimiter
 from app.services.sonarr import SonarrClient
 from app.services.tmdb import TmdbClient, TmdbError
-from app.services.torrents import TorrentService
+from app.services.torrent_cleanup import TorrentCleanupService
+from app.services.torrents import TorrentError, TorrentService
 from app.services.recommendations import RecommendationService
 from app.services.search import SearchService
 from app.services.session import SessionService
@@ -132,6 +133,10 @@ async def lifespan(app: FastAPI):
     # Ollama modell előmelegítése háttérben (nem blokkolja az indulást).
     warmup_task = asyncio.create_task(search.ollama.warmup())
 
+    # Befejezett torrentek időzített törlése (a settings-et körönként olvassa).
+    cleanup_service = TorrentCleanupService(state.app_state.torrents)
+    cleanup_task = asyncio.create_task(cleanup_service.run_loop())
+
     bot_tasks: list[asyncio.Task] = []
     if settings.telegram_enabled and settings.telegram_bot_token:
         from app.bots.telegram_bot import run_telegram_bot
@@ -152,6 +157,8 @@ async def lifespan(app: FastAPI):
         task.cancel()
     await asyncio.gather(*bot_tasks, return_exceptions=True)
     warmup_task.cancel()
+    cleanup_task.cancel()
+    await asyncio.gather(cleanup_task, return_exceptions=True)
     await queue.stop()
     await cache.close()
     state.app_state = None
@@ -635,7 +642,148 @@ async def torrents(_: UserSession = Depends(get_required_session)) -> dict:
             status_code=502,
             detail=f"A torrent kliens ({st.torrents.client_type}) nem érhető el: {exc}",
         ) from exc
-    return {"torrents": items, "configured": True}
+    # Ha az auto-törlés aktív, minden befejezett torrenthez kiszámoljuk a
+    # tervezett törlési időt (unix mp) — a UI visszaszámlálót mutat belőle.
+    hours = settings.torrent_auto_delete_hours
+    if hours > 0:
+        for item in items:
+            if item.get("completedAt"):
+                item["deleteAt"] = item["completedAt"] + hours * 3600
+    return {"torrents": items, "configured": True, "auto_delete_hours": hours}
+
+
+@app.delete("/api/torrents/{torrent_id}")
+async def delete_torrent(
+    torrent_id: str,
+    delete_files: bool = True,
+    _: UserSession = Depends(get_admin_session),
+) -> dict[str, bool]:
+    st = _state()
+    if not st.torrents.configured:
+        raise HTTPException(status_code=400, detail="Nincs torrent kliens konfigurálva.")
+    try:
+        items = await st.torrents.list_torrents()
+        item = next((t for t in items if t["id"] == torrent_id), None)
+        if item is None:
+            raise HTTPException(status_code=404, detail="A torrent nem található.")
+        await TorrentCleanupService(st.torrents).delete_and_log(
+            item, mode="manual", delete_files=delete_files
+        )
+    except TorrentError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"deleted": True}
+
+
+@app.get("/api/torrents/cleanup/log")
+async def torrent_cleanup_log(
+    _: UserSession = Depends(get_admin_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    entries = await TorrentCleanupService.recent_log(db)
+    return {
+        "entries": [
+            {
+                "id": e.id,
+                "name": e.name,
+                "mode": e.mode,
+                "size_bytes": e.size_bytes,
+                "deleted_at": e.deleted_at.isoformat() if e.deleted_at else None,
+            }
+            for e in entries
+        ],
+        "auto_delete_hours": settings.torrent_auto_delete_hours,
+    }
+
+
+# ── Statisztika (admin) ──────────────────────────────────────────────────────
+
+
+@app.get("/api/stats")
+async def get_stats(
+    _: UserSession = Depends(get_admin_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    from sqlalchemy import func as _func, select as _select
+
+    from app.db.models import AddJob, Conversation, ConversationMessage, MediaEvent, User
+
+    st = _state()
+
+    async def _count(stmt) -> int:
+        return int((await db.execute(stmt)).scalar() or 0)
+
+    users = await _count(_select(_func.count()).select_from(User).where(User.username.is_not(None)))
+    conversations = await _count(_select(_func.count()).select_from(Conversation))
+    messages = await _count(_select(_func.count()).select_from(ConversationMessage))
+    adds_total = await _count(
+        _select(_func.count()).select_from(MediaEvent).where(MediaEvent.event_type == "added")
+    )
+
+    # Hozzáadások naponta az utolsó 14 napban (mini oszlopdiagramhoz)
+    since = _dt.now(_UTC) - _td(days=14)
+    rows = (
+        await db.execute(
+            _select(_func.date(MediaEvent.created_at), _func.count())
+            .where(MediaEvent.event_type == "added", MediaEvent.created_at >= since)
+            .group_by(_func.date(MediaEvent.created_at))
+            .order_by(_func.date(MediaEvent.created_at))
+        )
+    ).all()
+    adds_by_day = [{"date": str(row[0]), "count": int(row[1])} for row in rows]
+
+    job_rows = (
+        await db.execute(_select(AddJob.status, _func.count()).group_by(AddJob.status))
+    ).all()
+    jobs = {str(row[0]): int(row[1]) for row in job_rows}
+
+    # Könyvtár-méret a Sonarr/Radarr-ból (párhuzamosan, hibatűrően)
+    async def _movie_count() -> int | None:
+        if not st.search.radarr.configured:
+            return None
+        try:
+            return len(await st.search.radarr.list_movies())
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _series_count() -> int | None:
+        if not st.search.sonarr.configured:
+            return None
+        try:
+            return len(await st.search.sonarr.list_series())
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _torrent_stats() -> dict | None:
+        if not st.torrents.configured:
+            return None
+        try:
+            items = await st.torrents.list_torrents()
+        except Exception:  # noqa: BLE001
+            return None
+        return {
+            "total": len(items),
+            "downloading": sum(1 for t in items if t["state"] == "downloading"),
+            "seeding": sum(1 for t in items if t["state"] == "seeding"),
+        }
+
+    movies, series, torrent_stats = await asyncio.gather(
+        _movie_count(), _series_count(), _torrent_stats()
+    )
+
+    return {
+        "library": {"movies": movies, "series": series},
+        "torrents": torrent_stats,
+        "users": users,
+        "conversations": conversations,
+        "messages": messages,
+        "adds_total": adds_total,
+        "adds_by_day": adds_by_day,
+        "jobs": jobs,
+    }
 
 
 # ── Storage (admin) ──────────────────────────────────────────────────────────

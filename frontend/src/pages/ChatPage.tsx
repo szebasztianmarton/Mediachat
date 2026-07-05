@@ -91,8 +91,8 @@ function InlineResultCard({
         gap: 12,
         marginTop: 10,
         padding: "12px 14px",
-        background: "#F5F5F5",
-        border: "1px solid #E8E8E8",
+        background: "var(--surface-2)",
+        border: "1px solid var(--border-2)",
         borderRadius: 10,
       }}
     >
@@ -101,7 +101,7 @@ function InlineResultCard({
         style={{
           width: 40,
           height: 56,
-          background: "#e5e7eb",
+          background: "var(--surface-3)",
           borderRadius: 6,
           flexShrink: 0,
           overflow: "hidden",
@@ -129,8 +129,8 @@ function InlineResultCard({
               <span
                 className="badge"
                 style={{
-                  background: "#F0F0F0",
-                  color: "#000000",
+                  background: "var(--surface-2)",
+                  color: "var(--ink)",
                   borderColor: "transparent",
                   flexShrink: 0,
                 }}
@@ -155,7 +155,7 @@ function InlineResultCard({
                 ? "btn-secondary"
                 : "btn-primary"
             }`}
-            style={state === "added" ? { color: "#000000", borderColor: "#E0E0E0" } : {}}
+            style={state === "added" ? { color: "var(--ink)", borderColor: "var(--border)" } : {}}
           >
             {state === "idle" && (
               <>
@@ -206,8 +206,8 @@ function AddedSuccessCard({ added }: { added: AddedInfo }) {
         gap: 10,
         marginTop: 10,
         padding: "10px 14px",
-        background: "#F0F0F0",
-        border: "1px solid #E0E0E0",
+        background: "var(--surface-2)",
+        border: "1px solid var(--border)",
         borderRadius: 8,
       }}
     >
@@ -514,15 +514,15 @@ export default function ChatPage() {
           <span
             className="badge"
             style={{
-              background: ollamaStatus === "online" ? "#F0F0F0" : ollamaStatus === "offline" ? "#EBEBEB" : "#F5F5F5",
-              color: "#000000",
-              borderColor: "#E0E0E0",
+              background: "var(--surface-2)",
+              color: "var(--ink)",
+              borderColor: "var(--border)",
             }}
           >
             <span
               className="dot"
               style={{
-                background: ollamaStatus === "online" ? "#000000" : ollamaStatus === "offline" ? "#888888" : "#AAAAAA",
+                background: ollamaStatus === "online" ? "var(--ok)" : ollamaStatus === "offline" ? "var(--err)" : "var(--warn)",
                 animation: ollamaStatus === "checking" ? "dot-pulse 1.5s ease-in-out infinite" : "none",
               }}
             />
@@ -544,8 +544,8 @@ export default function ChatPage() {
           style={{
             width: 200,
             flexShrink: 0,
-            borderRight: "1px solid #E0E0E0",
-            background: "#F5F5F5",
+            borderRight: "1px solid var(--border)",
+            background: "var(--surface-2)",
             display: "flex",
             flexDirection: "column",
             overflow: "hidden",
@@ -579,16 +579,16 @@ export default function ChatPage() {
                   gap: 6,
                   padding: "7px 8px 7px 12px",
                   cursor: "pointer",
-                  background: currentConvId === c.id ? "#E8E8E8" : "transparent",
-                  borderRight: currentConvId === c.id ? "2px solid #000000" : "2px solid transparent",
+                  background: currentConvId === c.id ? "var(--surface-3)" : "transparent",
+                  borderRight: currentConvId === c.id ? "2px solid var(--ink)" : "2px solid transparent",
                   transition: "none",
                 }}
-                onMouseEnter={(e) => { if (currentConvId !== c.id) e.currentTarget.style.background = "#E8E8E8"; }}
+                onMouseEnter={(e) => { if (currentConvId !== c.id) e.currentTarget.style.background = "var(--surface-3)"; }}
                 onMouseLeave={(e) => { if (currentConvId !== c.id) e.currentTarget.style.background = "transparent"; }}
               >
                 <p
                   className="text-xs truncate"
-                  style={{ flex: 1, color: currentConvId === c.id ? "#000000" : "#333333", margin: 0 }}
+                  style={{ flex: 1, color: currentConvId === c.id ? "var(--ink)" : "var(--ink-2)", margin: 0 }}
                   title={c.title}
                 >
                   {c.title}
@@ -596,7 +596,7 @@ export default function ChatPage() {
                 <button
                   onClick={(e) => { e.stopPropagation(); deleteConversation(c.id); }}
                   className="btn btn-ghost btn-sm"
-                  style={{ padding: "2px 4px", color: "#888888", flexShrink: 0 }}
+                  style={{ padding: "2px 4px", color: "var(--ink-3)", flexShrink: 0 }}
                   title="Törlés"
                   aria-label={`${c.title} törlése`}
                 >
@@ -632,8 +632,8 @@ export default function ChatPage() {
                         width: 32,
                         height: 32,
                         borderRadius: 999,
-                        background: msg.role === "error" ? "#F0F0F0" : "#F5F5F5",
-                        border: `1px solid ${msg.role === "error" ? "#E0E0E0" : "#D8D8D8"}`,
+                        background: "var(--surface-2)",
+                        border: "1px solid var(--border)",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -700,7 +700,7 @@ export default function ChatPage() {
                       )}
                     </div>
 
-                    <span style={{ fontSize: 11, color: "#9ca3af", padding: "0 2px" }}>
+                    <span style={{ fontSize: 11, color: "var(--ink-3)", padding: "0 2px" }}>
                       {msg.timestamp.toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit" })}
                     </span>
                   </div>
@@ -713,7 +713,7 @@ export default function ChatPage() {
                   <div
                     style={{
                       width: 32, height: 32, borderRadius: 999,
-                      background: "#F5F5F5", border: "1px solid #D8D8D8",
+                      background: "var(--surface-2)", border: "1px solid var(--border)",
                       display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2,
                     }}
                   >
@@ -729,7 +729,7 @@ export default function ChatPage() {
                           key={delay}
                           style={{
                             width: 6, height: 6, borderRadius: 3,
-                            background: "#9ca3af",
+                            background: "var(--ink-3)",
                             animation: "bounce 1s ease-in-out infinite",
                             animationDelay: `${delay}ms`,
                             display: "inline-block",
@@ -750,8 +750,8 @@ export default function ChatPage() {
         <div
           style={{
             flexShrink: 0,
-            borderTop: "1px solid #D8D8D8",
-            background: "#FAFAFA",
+            borderTop: "1px solid var(--border)",
+            background: "var(--surface-2)",
             padding: "12px 24px 16px",
           }}
         >
@@ -782,7 +782,7 @@ export default function ChatPage() {
                 Küld
               </button>
             </div>
-            <p style={{ textAlign: "center", fontSize: 11, color: "#9ca3af", marginTop: 8 }}>
+            <p style={{ textAlign: "center", fontSize: 11, color: "var(--ink-3)", marginTop: 8 }}>
               Enter küld · Shift+Enter új sor · Írj film/sorozat nevet a kereséshez
             </p>
           </div>

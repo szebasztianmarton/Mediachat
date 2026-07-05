@@ -29,7 +29,13 @@ export default function LoginPage() {
         role: data.user.role,
       });
       logger.success("auth", `Bejelentkezés sikeres: ${data.user.username} (${data.user.role})`);
-      navigate(data.user.role === "admin" ? "/dashboard" : "/chat");
+      // Első bejelentkezéskor téma-setup, utána a szokásos kezdőoldal
+      const setupDone = localStorage.getItem(`mediachat-setup-${data.user.id}`);
+      if (!setupDone) {
+        navigate("/setup");
+      } else {
+        navigate(data.user.role === "admin" ? "/dashboard" : "/chat");
+      }
     } catch (err) {
       logger.warn("auth", `Sikertelen belépési kísérlet: ${username || "(üres)"}`);
       setError(
@@ -45,8 +51,7 @@ export default function LoginPage() {
 
   return (
     <div
-      style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#F9F9F9", padding: 16 }}
-      className="[data-theme=dark]:bg-[#09090b]"
+      style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)", padding: 16 }}
     >
       <div style={{ width: "100%", maxWidth: 380 }}>
 
@@ -56,7 +61,7 @@ export default function LoginPage() {
             style={{
               width: 48,
               height: 48,
-              background: "#000000",
+              background: "var(--ink)",
               borderRadius: 10,
               display: "flex",
               alignItems: "center",
@@ -73,7 +78,7 @@ export default function LoginPage() {
               fontFamily: "'EB Garamond', Georgia, serif",
               fontSize: 24,
               fontWeight: 600,
-              color: "#000000",
+              color: "var(--ink)",
               letterSpacing: "-0.01em",
               margin: 0,
               lineHeight: 1.2,
@@ -81,7 +86,7 @@ export default function LoginPage() {
           >
             Media Assistant
           </h1>
-          <p style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}>
+          <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 4 }}>
             Sonarr · Radarr · Ollama integráció
           </p>
         </div>
@@ -95,7 +100,7 @@ export default function LoginPage() {
             style={{
               fontSize: 15,
               fontWeight: 600,
-              color: "#000000",
+              color: "var(--ink)",
               margin: "0 0 20px",
               letterSpacing: "-0.02em",
             }}
@@ -108,7 +113,7 @@ export default function LoginPage() {
             <div>
               <label
                 htmlFor="username"
-                style={{ display: "block", fontSize: 13, fontWeight: 500, color: "#333333", marginBottom: 6 }}
+                style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--ink-2)", marginBottom: 6 }}
               >
                 Felhasználónév
               </label>
@@ -128,7 +133,7 @@ export default function LoginPage() {
             <div>
               <label
                 htmlFor="password"
-                style={{ display: "block", fontSize: 13, fontWeight: 500, color: "#333333", marginBottom: 6 }}
+                style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--ink-2)", marginBottom: 6 }}
               >
                 Jelszó
               </label>
@@ -161,7 +166,7 @@ export default function LoginPage() {
                     background: "none",
                     border: "none",
                     cursor: "pointer",
-                    color: "#9ca3af",
+                    color: "var(--ink-3)",
                   }}
                 >
                   {showPass ? (
@@ -184,7 +189,7 @@ export default function LoginPage() {
                   style={{
                     marginTop: 8,
                     fontSize: 12.5,
-                    color: "#dc2626",
+                    color: "var(--err)",
                     display: "flex",
                     alignItems: "center",
                     gap: 5,
@@ -222,20 +227,20 @@ export default function LoginPage() {
             style={{
               marginTop: 20,
               paddingTop: 16,
-              borderTop: "1px solid #F0F0F0",
+              borderTop: "1px solid var(--border-2)",
               textAlign: "center",
             }}
           >
-            <p style={{ fontSize: 12, color: "#9ca3af" }}>
-              Alapértelmezett: <code style={{ fontFamily: "monospace", color: "#333333", background: "#F0F0F0", padding: "1px 5px", borderRadius: 4 }}>admin / media2024</code>
+            <p style={{ fontSize: 12, color: "var(--ink-3)" }}>
+              Alapértelmezett: <code style={{ fontFamily: "monospace", color: "var(--ink-2)", background: "var(--surface-2)", padding: "1px 5px", borderRadius: 4 }}>admin / media2024</code>
             </p>
-            <p style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
+            <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 4 }}>
               (ADMIN_USERNAME / ADMIN_PASSWORD env-változóval módosítható)
             </p>
           </div>
         </div>
 
-        <p style={{ textAlign: "center", fontSize: 12, color: "#9ca3af", marginTop: 20 }}>
+        <p style={{ textAlign: "center", fontSize: 12, color: "var(--ink-3)", marginTop: 20 }}>
           Sonarr &amp; Radarr automatikus letöltő platform
         </p>
       </div>

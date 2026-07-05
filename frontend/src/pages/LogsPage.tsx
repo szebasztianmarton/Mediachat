@@ -184,7 +184,7 @@ export default function LogsPage() {
                 </button>
               ))}
             </div>
-            <div style={{ width: 1, background: "#e5e7eb", alignSelf: "stretch" }} />
+            <div style={{ width: 1, background: "var(--surface-3)", alignSelf: "stretch" }} />
             {/* Level filter */}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
               {LEVELS.map((l) => (

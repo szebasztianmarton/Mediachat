@@ -74,6 +74,7 @@ export interface AppSettings {
   torrentUrl: string;
   torrentUsername: string;
   torrentPassword: string;
+  torrentAutoDeleteHours: string; // "0" = kikapcsolva
   // Plex
   plexEnabled: boolean;
   plexUrl: string;
@@ -114,6 +115,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   torrentUrl: "",
   torrentUsername: "",
   torrentPassword: "",
+  torrentAutoDeleteHours: "0",
   plexEnabled: false,
   plexUrl: "",
   plexToken: "",

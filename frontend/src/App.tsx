@@ -8,6 +8,7 @@ import UsersPage from "./pages/UsersPage";
 import TrainingPage from "./pages/TrainingPage";
 import RecommendationsPage from "./pages/RecommendationsPage";
 import StoragePage from "./pages/StoragePage";
+import SetupPage from "./pages/SetupPage";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { getAuth } from "./utils/auth";
 
@@ -28,6 +29,7 @@ export default function App() {
     <ErrorBoundary>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/setup" element={<RequireAuth><SetupPage /></RequireAuth>} />
         <Route path="/chat" element={<RequireAuth><ChatPage /></RequireAuth>} />
         <Route path="/recommendations" element={<RequireAuth><RecommendationsPage /></RequireAuth>} />
         <Route path="/dashboard" element={<RequireAdmin><DashboardPage /></RequireAdmin>} />

@@ -56,7 +56,7 @@ function NowPlayingWidget() {
     <div className="card overflow-hidden">
       <div className="card-header">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "#F0F0F0" }}>
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "var(--surface-2)" }}>
             <svg className="w-3.5 h-3.5" fill="none" stroke="#000000" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m7.5-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-1.5-3.75h-7.5" />
             </svg>
@@ -93,9 +93,9 @@ function NowPlayingWidget() {
               <div key={s.id} className="flex items-center gap-3">
                 <div
                   className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-                  style={{ background: "#F0F0F0" }}
+                  style={{ background: "var(--surface-2)" }}
                 >
-                  <span className="text-xs font-semibold" style={{ color: "#000000" }}>
+                  <span className="text-xs font-semibold" style={{ color: "var(--ink)" }}>
                     {s.username[0].toUpperCase()}
                   </span>
                 </div>
@@ -105,8 +105,8 @@ function NowPlayingWidget() {
                     <span
                       className="badge"
                       style={{
-                        background: "#F0F0F0",
-                        color: "#000000",
+                        background: "var(--surface-2)",
+                        color: "var(--ink)",
                         borderColor: "transparent",
                         flexShrink: 0,
                       }}
@@ -122,7 +122,7 @@ function NowPlayingWidget() {
                     <div className="flex-1 h-1 bg-gray-100 rounded-full">
                       <div
                         className="h-1 rounded-full"
-                        style={{ width: `${s.progressPercent}%`, background: "#000000" }}
+                        style={{ width: `${s.progressPercent}%`, background: "var(--ink)" }}
                       />
                     </div>
                     <span className="text-xs text-gray-400 shrink-0">{s.progressPercent}%</span>
@@ -146,6 +146,15 @@ interface TorrentItem {
   dlSpeed: number;
   state: "downloading" | "seeding" | "paused" | "queued" | "error";
   sizeBytes: number;
+  completedAt?: number | null; // unix mp
+  deleteAt?: number | null;    // unix mp — mikor törli az auto-cleanup
+}
+
+function fmtCountdown(deleteAt: number): string {
+  const remaining = deleteAt - Date.now() / 1000;
+  if (remaining <= 0) return "hamarosan törlődik";
+  if (remaining < 3600) return `törlés ~${Math.max(1, Math.round(remaining / 60))} perc múlva`;
+  return `törlés ~${Math.round(remaining / 3600)} óra múlva`;
 }
 
 function fmtSpeed(bps: number): string {
@@ -174,6 +183,7 @@ function TorrentWidget() {
   const [torrents, setTorrents] = useState<TorrentItem[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -182,14 +192,14 @@ function TorrentWidget() {
         const data = await api<{ torrents?: TorrentItem[]; configured?: boolean }>("/api/torrents");
         if (!cancelled) {
           if (data.configured === false) {
-            setError("Torrent kliens nincs konfigurálva (QBITTORRENT_URL)");
+            setError("Torrent kliens nincs konfigurálva (Beállítások → Torrent)");
           } else {
             setError(null);
             setTorrents(data.torrents ?? []);
           }
         }
       } catch {
-        if (!cancelled) setError("A qBittorrent nem érhető el");
+        if (!cancelled) setError("A torrent kliens nem érhető el");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -199,11 +209,27 @@ function TorrentWidget() {
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
+  async function handleDelete(t: TorrentItem) {
+    if (confirmDelete !== t.id) {
+      setConfirmDelete(t.id);
+      setTimeout(() => setConfirmDelete(null), 3000);
+      return;
+    }
+    setConfirmDelete(null);
+    try {
+      await api(`/api/torrents/${encodeURIComponent(t.id)}`, { method: "DELETE" });
+      setTorrents((prev) => prev?.filter((x) => x.id !== t.id) ?? null);
+      logger.warn("torrent", `Torrent törölve: ${t.name}`);
+    } catch {
+      logger.error("torrent", `Torrent törlése sikertelen: ${t.name}`);
+    }
+  }
+
   return (
     <div className="card overflow-hidden">
       <div className="card-header">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "#F0F0F0" }}>
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "var(--surface-2)" }}>
             <svg className="w-3.5 h-3.5" fill="none" stroke="#000000" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
             </svg>
@@ -233,26 +259,135 @@ function TorrentWidget() {
               <div key={t.id}>
                 <div className="flex items-center justify-between gap-2 mb-1.5">
                   <span className="text-sm text-gray-800 truncate" style={{ letterSpacing: "-0.01em" }}>{t.name}</span>
-                  <span className={torrentStateBadge[t.state]}>
-                    {torrentStateLabel[t.state]}
-                    {t.state === "downloading" && ` · ${fmtSpeed(t.dlSpeed)}`}
-                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className={torrentStateBadge[t.state]}>
+                      {torrentStateLabel[t.state]}
+                      {t.state === "downloading" && ` · ${fmtSpeed(t.dlSpeed)}`}
+                    </span>
+                    <button
+                      onClick={() => handleDelete(t)}
+                      className={`btn btn-sm ${confirmDelete === t.id ? "btn-danger" : "btn-ghost"}`}
+                      style={{ padding: "0 6px", height: 22 }}
+                      title="Torrent törlése a kliensből"
+                      aria-label={`${t.name} törlése`}
+                    >
+                      {confirmDelete === t.id ? "Biztos?" : (
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
                 </div>
                 <div className="h-1.5 bg-gray-100 rounded-full">
                   <div
                     className="h-1.5 rounded-full transition-all"
                     style={{
                       width: `${t.progressPercent}%`,
-                      background: t.state === "error" ? "#888888" : "#000000",
+                      background: t.state === "error" ? "var(--err)" : "var(--ink)",
                     }}
                   />
                 </div>
-                <p className="text-xs text-gray-400 mt-1">{t.progressPercent}%</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  {t.progressPercent}%
+                  {t.deleteAt && <span style={{ color: "var(--warn)" }}> · {fmtCountdown(t.deleteAt)}</span>}
+                </p>
               </div>
             ))}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Statisztika szekció ───────────────────────────────────────────────────────
+
+interface StatsData {
+  library: { movies: number | null; series: number | null };
+  torrents: { total: number; downloading: number; seeding: number } | null;
+  users: number;
+  conversations: number;
+  messages: number;
+  adds_total: number;
+  adds_by_day: { date: string; count: number }[];
+  jobs: Record<string, number>;
+}
+
+function StatsSection() {
+  const [stats, setStats] = useState<StatsData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<StatsData>("/api/stats", { timeoutMs: 60_000 })
+      .then((data) => { if (!cancelled) setStats(data); })
+      .catch(() => { /* statisztika nélkül is él a dashboard */ })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-8">
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <div key={i} className="card p-4">
+            <div className="skeleton" style={{ height: 10, width: "60%", marginBottom: 8 }} />
+            <div className="skeleton" style={{ height: 22, width: "40%" }} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (!stats) return null;
+
+  const maxDay = Math.max(1, ...stats.adds_by_day.map((d) => d.count));
+  const tiles: { label: string; value: string | number }[] = [
+    { label: "Film a könyvtárban", value: stats.library.movies ?? "—" },
+    { label: "Sorozat", value: stats.library.series ?? "—" },
+    { label: "Hozzáadás összesen", value: stats.adds_total },
+    { label: "Aktív torrent", value: stats.torrents?.total ?? "—" },
+    { label: "Beszélgetés", value: stats.conversations },
+    { label: "Felhasználó", value: stats.users },
+  ];
+
+  return (
+    <div className="mb-8">
+      <p className="section-label mb-3">Statisztika</p>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+        {tiles.map((tile) => (
+          <div key={tile.label} className="card p-4">
+            <p className="text-xs font-medium text-gray-500" style={{ letterSpacing: "0.03em" }}>{tile.label}</p>
+            <p className="text-2xl font-bold text-gray-900 mt-1" style={{ letterSpacing: "-0.03em" }}>{tile.value}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Hozzáadások az elmúlt 14 napban — mini oszlopdiagram */}
+      {stats.adds_by_day.length > 0 && (
+        <div className="card p-4">
+          <p className="text-xs font-medium text-gray-500 mb-3">Hozzáadások az elmúlt 14 napban</p>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 64 }}>
+            {stats.adds_by_day.map((day) => (
+              <div
+                key={day.date}
+                title={`${day.date}: ${day.count}`}
+                style={{
+                  flex: 1,
+                  height: `${Math.max(8, (day.count / maxDay) * 100)}%`,
+                  background: "var(--primary-bg)",
+                  borderRadius: 2,
+                  minWidth: 6,
+                }}
+              />
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
+            <span className="text-[10px] text-gray-400">{stats.adds_by_day[0]?.date}</span>
+            <span className="text-[10px] text-gray-400">{stats.adds_by_day[stats.adds_by_day.length - 1]?.date}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -269,7 +404,7 @@ function StatCard({ value, label, icon }: { value: string | number; label: strin
         </div>
         <div
           className="w-9 h-9 rounded-lg flex items-center justify-center"
-          style={{ background: "#F0F0F0" }}
+          style={{ background: "var(--surface-2)" }}
         >
           <svg className="w-4 h-4" fill="none" stroke="#000000" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
             <path strokeLinecap="round" strokeLinejoin="round" d={icon} />
@@ -289,15 +424,15 @@ function QuickAction({ icon, title, desc, href }: { icon: string; title: string;
       className="card p-4 flex items-center gap-3 group cursor-pointer"
       style={{ textDecoration: "none", transition: "border-color 0.15s, box-shadow 0.15s" }}
       onMouseEnter={(e) => {
-        (e.currentTarget as HTMLElement).style.borderColor = "#E0E0E0";
+        (e.currentTarget as HTMLElement).style.borderColor = "var(--border-strong)";
         (e.currentTarget as HTMLElement).style.boxShadow = "0 1px 3px rgba(0,0,0,0.08)";
       }}
       onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.borderColor = "#D8D8D8";
+        (e.currentTarget as HTMLElement).style.borderColor = "var(--border)";
         (e.currentTarget as HTMLElement).style.boxShadow = "";
       }}
     >
-      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: "#F0F0F0" }}>
+      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: "var(--surface-2)" }}>
         <svg className="w-4 h-4" fill="none" stroke="#000000" strokeWidth="1.75" viewBox="0 0 24 24" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" d={icon} />
         </svg>
@@ -407,6 +542,9 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* Statisztika */}
+        <StatsSection />
+
         {/* Quick actions */}
         <div className="mb-2">
           <p className="section-label mb-3">Gyors műveletek</p>
@@ -442,7 +580,7 @@ export default function DashboardPage() {
               { label: "AI modell", value: "Ollama" },
               { label: "Verzió", value: "MVP 3.0" },
             ].map(({ label, value }) => (
-              <div key={label} style={{ padding: "10px 14px", background: "#F5F5F5", borderRadius: 8, border: "1px solid #E8E8E8" }}>
+              <div key={label} style={{ padding: "10px 14px", background: "var(--surface-2)", borderRadius: 8, border: "1px solid var(--border-2)" }}>
                 <p className="text-xs text-gray-400 mb-1">{label}</p>
                 <p className="text-sm font-medium text-gray-800" style={{ fontFamily: "ui-monospace, monospace", letterSpacing: 0 }}>{value}</p>
               </div>

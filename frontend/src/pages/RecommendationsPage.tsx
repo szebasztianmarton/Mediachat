@@ -46,8 +46,8 @@ function RecCard({ item, onFeedback }: { item: RecItem; onFeedback: (item: RecIt
         style={{
           width: 56,
           height: 80,
-          background: "#F0F0F0",
-          border: "1px solid #E0E0E0",
+          background: "var(--surface-2)",
+          border: "1px solid var(--border)",
           borderRadius: 4,
           flexShrink: 0,
           overflow: "hidden",
@@ -175,7 +175,7 @@ export default function RecommendationsPage() {
       <div className="flex-1 overflow-y-auto" style={{ padding: 24 }}>
 
         {/* Catalog selector */}
-        <div style={{ display: "flex", border: "1px solid #E0E0E0", borderRadius: 6, overflow: "hidden", maxWidth: 480, marginBottom: 8 }}>
+        <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", maxWidth: 480, marginBottom: 8 }}>
           {CATALOGS.map((c, i) => (
             <button
               key={c.key}
@@ -188,9 +188,9 @@ export default function RecommendationsPage() {
                 fontWeight: 500,
                 cursor: "pointer",
                 border: "none",
-                borderLeft: i > 0 ? "1px solid #E0E0E0" : "none",
-                background: catalog === c.key ? "#000000" : "#fff",
-                color: catalog === c.key ? "#fff" : "#6b7280",
+                borderLeft: i > 0 ? "1px solid var(--border)" : "none",
+                background: catalog === c.key ? "var(--primary-bg)" : "var(--surface)",
+                color: catalog === c.key ? "var(--primary-ink)" : "var(--ink-3)",
                 transition: "none",
                 fontFamily: "inherit",
               }}
@@ -219,7 +219,7 @@ export default function RecommendationsPage() {
 
         {/* Error */}
         {!loading && error && (
-          <div className="card" style={{ padding: "16px 20px", background: "#F5F5F5", borderColor: "#D8D8D8" }}>
+          <div className="card" style={{ padding: "16px 20px", background: "var(--surface-2)", borderColor: "var(--border)" }}>
             <p className="text-xs text-gray-700">{error}</p>
           </div>
         )}
@@ -230,7 +230,7 @@ export default function RecommendationsPage() {
             <div
               style={{
                 width: 44, height: 44, margin: "0 auto 12px", borderRadius: 8,
-                background: "#F0F0F0", border: "1px solid #E0E0E0",
+                background: "var(--surface-2)", border: "1px solid var(--border)",
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}
             >

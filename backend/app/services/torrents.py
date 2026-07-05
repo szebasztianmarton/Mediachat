@@ -69,8 +69,23 @@ class QbittorrentClient:
             response.raise_for_status()
             return [self._to_item(t) for t in response.json()]
 
+    async def delete_torrent(self, torrent_id: str, delete_files: bool) -> None:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            if self.username:
+                await client.post(
+                    f"{self.base_url}/api/v2/auth/login",
+                    data={"username": self.username, "password": self.password},
+                )
+            response = await client.post(
+                f"{self.base_url}/api/v2/torrents/delete",
+                data={"hashes": torrent_id, "deleteFiles": str(delete_files).lower()},
+            )
+            if response.status_code >= 400:
+                raise TorrentError(f"qBittorrent törlés sikertelen: HTTP {response.status_code}")
+
     @staticmethod
     def _to_item(t: dict[str, Any]) -> dict[str, Any]:
+        completion = int(t.get("completion_on") or 0)
         return {
             "id": t.get("hash") or t.get("name") or "",
             "name": t.get("name") or "Ismeretlen torrent",
@@ -78,6 +93,8 @@ class QbittorrentClient:
             "dlSpeed": int(t.get("dlspeed") or 0),
             "state": _QBT_STATE_MAP.get(str(t.get("state") or ""), "queued"),
             "sizeBytes": int(t.get("size") or 0),
+            # Unix timestamp, ha a letöltés befejeződött (auto-törléshez)
+            "completedAt": completion if completion > 0 else None,
         }
 
 
@@ -92,14 +109,8 @@ class TransmissionClient:
     def _auth(self) -> tuple[str, str] | None:
         return (self.username, self.password) if self.username else None
 
-    async def list_torrents(self) -> list[dict[str, Any]]:
+    async def _rpc(self, body: dict[str, Any]) -> dict[str, Any]:
         rpc_url = f"{self.base_url}/transmission/rpc"
-        body = {
-            "method": "torrent-get",
-            "arguments": {
-                "fields": ["hashString", "name", "percentDone", "rateDownload", "status", "totalSize", "error"],
-            },
-        }
         async with httpx.AsyncClient(timeout=10.0, auth=self._auth()) as client:
             response = await client.post(rpc_url, json=body)
             if response.status_code == 409:
@@ -114,12 +125,31 @@ class TransmissionClient:
             data = response.json()
             if data.get("result") != "success":
                 raise TorrentError(f"Transmission RPC hiba: {data.get('result')}")
-            torrents = (data.get("arguments") or {}).get("torrents") or []
-            return [self._to_item(t) for t in torrents]
+            return data
+
+    async def list_torrents(self) -> list[dict[str, Any]]:
+        data = await self._rpc({
+            "method": "torrent-get",
+            "arguments": {
+                "fields": [
+                    "hashString", "name", "percentDone", "rateDownload",
+                    "status", "totalSize", "error", "doneDate",
+                ],
+            },
+        })
+        torrents = (data.get("arguments") or {}).get("torrents") or []
+        return [self._to_item(t) for t in torrents]
+
+    async def delete_torrent(self, torrent_id: str, delete_files: bool) -> None:
+        await self._rpc({
+            "method": "torrent-remove",
+            "arguments": {"ids": [torrent_id], "delete-local-data": delete_files},
+        })
 
     @staticmethod
     def _to_item(t: dict[str, Any]) -> dict[str, Any]:
         state = "error" if t.get("error") else _TRANSMISSION_STATE_MAP.get(int(t.get("status") or 0), "queued")
+        done_date = int(t.get("doneDate") or 0)
         return {
             "id": t.get("hashString") or t.get("name") or "",
             "name": t.get("name") or "Ismeretlen torrent",
@@ -127,6 +157,7 @@ class TransmissionClient:
             "dlSpeed": int(t.get("rateDownload") or 0),
             "state": state,
             "sizeBytes": int(t.get("totalSize") or 0),
+            "completedAt": done_date if done_date > 0 else None,
         }
 
 
@@ -150,3 +181,8 @@ class TorrentService:
         if not self.configured:
             return []
         return await self._client().list_torrents()
+
+    async def delete_torrent(self, torrent_id: str, delete_files: bool) -> None:
+        if not self.configured:
+            raise TorrentError("Nincs torrent kliens konfigurálva.")
+        await self._client().delete_torrent(torrent_id, delete_files)

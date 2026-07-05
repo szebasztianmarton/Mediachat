@@ -25,7 +25,7 @@ export default class ErrorBoundary extends Component<Props, State> {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            background: "#F9F9F9",
+            background: "var(--bg)",
             padding: 24,
           }}
         >
@@ -34,19 +34,19 @@ export default class ErrorBoundary extends Component<Props, State> {
               style={{
                 fontFamily: "'EB Garamond', Georgia, serif",
                 fontSize: 22,
-                color: "#000000",
+                color: "var(--ink)",
                 margin: "0 0 8px",
               }}
             >
               Hiba történt
             </h1>
-            <p style={{ fontSize: 13, color: "#666666", margin: "0 0 12px" }}>
+            <p style={{ fontSize: 13, color: "var(--ink-2)", margin: "0 0 12px" }}>
               Váratlan hiba lépett fel a felület megjelenítése közben.
             </p>
             <p
               style={{
                 fontSize: 11,
-                color: "#999999",
+                color: "var(--ink-3)",
                 fontFamily: "monospace",
                 margin: "0 0 20px",
                 wordBreak: "break-word",

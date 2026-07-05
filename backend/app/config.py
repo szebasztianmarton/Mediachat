@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     torrent_url: str = ""
     torrent_username: str = ""
     torrent_password: str = ""
+    # Befejezett letöltés automatikus törlése ennyi óra után (0 = kikapcsolva)
+    torrent_auto_delete_hours: int = 0
+    # Auto-törlésnél a letöltött fájlok is törlődjenek-e
+    torrent_auto_delete_files: bool = True
 
     # Media szerverek ("Most nézi" widget)
     plex_url: str = ""

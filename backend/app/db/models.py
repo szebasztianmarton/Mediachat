@@ -74,6 +74,17 @@ class ConversationMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class TorrentCleanupLog(Base):
+    __tablename__ = "torrent_cleanup_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    torrent_id: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(255))
+    mode: Mapped[str] = mapped_column(String(16), default="auto")  # auto | manual
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ConfigOverride(Base):
     __tablename__ = "config_overrides"
 

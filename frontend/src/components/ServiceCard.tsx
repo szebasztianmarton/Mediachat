@@ -38,7 +38,7 @@ export default function ServiceCard({ service }: Props) {
     >
       <div
         className="rounded-md p-2 flex-shrink-0 mt-0.5"
-        style={{ background: "#F0F0F0" }}
+        style={{ background: "var(--surface-2)" }}
       >
         <svg
           className="w-4 h-4"
@@ -54,17 +54,17 @@ export default function ServiceCard({ service }: Props) {
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2">
-          <span className="font-semibold text-sm truncate" style={{ color: "#000000", letterSpacing: "-0.01em" }}>
+          <span className="font-semibold text-sm truncate" style={{ color: "var(--ink)", letterSpacing: "-0.01em" }}>
             {service.name}
           </span>
           <StatusBadge status={service.status} />
         </div>
-        <p className="text-xs mt-0.5" style={{ color: "#888888" }}>{desc}</p>
+        <p className="text-xs mt-0.5" style={{ color: "var(--ink-3)" }}>{desc}</p>
         {service.latency !== undefined && isOnline && (
-          <p className="text-xs mt-0.5" style={{ color: "#AAAAAA" }}>{service.latency}ms</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--ink-3)" }}>{service.latency}ms</p>
         )}
         {service.error && !isOnline && !isChecking && (
-          <p className="text-xs mt-0.5 wrap-break-word" style={{ fontSize: 11, color: "#666666" }}>
+          <p className="text-xs mt-0.5 wrap-break-word" style={{ fontSize: 11, color: "var(--ink-2)" }}>
             {service.error}
           </p>
         )}

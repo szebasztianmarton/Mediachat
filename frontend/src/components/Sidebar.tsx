@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { api } from "../utils/api";
 import { clearAuth, getAuth } from "../utils/auth";
-import { getTheme, toggleTheme } from "../utils/theme";
+import { getTheme, setTheme, THEMES } from "../utils/theme";
 import type { Theme } from "../utils/theme";
 
 interface NavItemDef {
@@ -61,58 +61,40 @@ const NAV_ITEMS: NavItemDef[] = [
   },
 ];
 
-function sidebarColors(theme: Theme) {
-  if (theme === "dark") {
-    return {
-      bg:          "#141414",
-      border:      "1px solid #2E2E2E",
-      divider:     "#2E2E2E",
-      logoIconBg:  "#F0F0F0",
-      logoIconStroke: "#000000",
-      logoText:    "#F0F0F0",
-      userText:    "#F0F0F0",
-      userSubText: "#666666",
-      avatarBg:    "#F0F0F0",
-      avatarText:  "#000000",
-      actionBg:    "transparent",
-      actionBorder:"#2E2E2E",
-      actionColor: "#666666",
-      actionHoverBg:    "#F0F0F0",
-      actionHoverColor: "#000000",
-    };
-  }
-  return {
-    bg:          "#FFFFFF",
-    border:      "1px solid #E0E0E0",
-    divider:     "#E0E0E0",
-    logoIconBg:  "#000000",
-    logoIconStroke: "#FFFFFF",
-    logoText:    "#000000",
-    userText:    "#000000",
-    userSubText: "#999999",
-    avatarBg:    "#000000",
-    avatarText:  "#FFFFFF",
-    actionBg:    "transparent",
-    actionBorder:"#E0E0E0",
-    actionColor: "#999999",
-    actionHoverBg:    "#000000",
-    actionHoverColor: "#FFFFFF",
-  };
-}
+// Minden szín CSS-változóból jön — a témák az index.css-ben élnek.
+const sidebarColors = {
+  bg:          "var(--surface)",
+  border:      "1px solid var(--border)",
+  divider:     "var(--border)",
+  logoIconBg:  "var(--primary-bg)",
+  logoIconStroke: "var(--primary-ink)",
+  logoText:    "var(--ink)",
+  userText:    "var(--ink)",
+  userSubText: "var(--ink-3)",
+  avatarBg:    "var(--primary-bg)",
+  avatarText:  "var(--primary-ink)",
+  actionBg:    "transparent",
+  actionBorder: "var(--border)",
+  actionColor: "var(--ink-3)",
+  actionHoverBg:    "var(--primary-bg)",
+  actionHoverColor: "var(--primary-ink)",
+};
 
 export default function Sidebar() {
   const navigate = useNavigate();
   const auth = getAuth();
   const isAdmin = auth?.role === "admin";
-  const [theme, setTheme] = useState<Theme>(getTheme);
+  const [theme, setThemeState] = useState<Theme>(getTheme);
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
-  function handleThemeToggle() {
-    const next = toggleTheme();
+  function chooseTheme(next: Theme) {
     setTheme(next);
+    setThemeState(next);
+    setThemeMenuOpen(false);
   }
 
   function handleLogout() {
@@ -123,7 +105,7 @@ export default function Sidebar() {
   }
 
   const visibleItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
-  const c = sidebarColors(theme);
+  const c = sidebarColors;
 
   return (
     <aside
@@ -265,25 +247,66 @@ export default function Sidebar() {
           </div>
         )}
 
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: "flex", gap: 6, position: "relative" }}>
+          {/* Témaválasztó popover */}
+          {themeMenuOpen && (
+            <div
+              style={{
+                position: "absolute",
+                bottom: 38,
+                left: 0,
+                width: 200,
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                boxShadow: "var(--shadow-pop)",
+                padding: 6,
+                zIndex: 60,
+              }}
+              role="menu"
+              aria-label="Téma választása"
+            >
+              {THEMES.map((t) => (
+                <button
+                  key={t.id}
+                  role="menuitemradio"
+                  aria-checked={theme === t.id}
+                  onClick={() => chooseTheme(t.id)}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-start",
+                    width: "100%",
+                    padding: "7px 9px",
+                    border: "none",
+                    borderRadius: "var(--radius-sm)",
+                    background: theme === t.id ? "var(--surface-3)" : "transparent",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)" }}>
+                    {t.label} {theme === t.id && "✓"}
+                  </span>
+                  <span style={{ fontSize: 10.5, color: "var(--ink-3)", lineHeight: 1.3 }}>{t.description}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           <SidebarActionBtn
-            title={theme === "dark" ? "Világos mód" : "Sötét mód"}
-            onClick={handleThemeToggle}
-            bg={c.actionBg}
+            title="Téma választása"
+            onClick={() => setThemeMenuOpen((v) => !v)}
+            bg={themeMenuOpen ? c.actionHoverBg : c.actionBg}
             border={c.actionBorder}
-            color={c.actionColor}
+            color={themeMenuOpen ? c.actionHoverColor : c.actionColor}
             hoverBg={c.actionHoverBg}
             hoverColor={c.actionHoverColor}
           >
-            {theme === "dark" ? (
-              <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
-              </svg>
-            ) : (
-              <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
-              </svg>
-            )}
+            <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4.098 19.902a3.75 3.75 0 005.304 0l6.401-6.402M6.75 21A3.75 3.75 0 013 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 003.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.879 2.88M6.75 17.25h.008v.008H6.75v-.008z" />
+            </svg>
           </SidebarActionBtn>
 
           <SidebarActionBtn

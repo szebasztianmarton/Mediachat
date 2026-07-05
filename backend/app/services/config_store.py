@@ -27,6 +27,7 @@ EDITABLE_KEYS: frozenset[str] = frozenset(
         "torrent_url",
         "torrent_username",
         "torrent_password",
+        "torrent_auto_delete_hours",
         "plex_url",
         "plex_token",
         "jellyfin_url",
@@ -86,7 +87,17 @@ async def save_overrides(db: AsyncSession, values: dict[str, str]) -> None:
 
 def apply_to_settings(values: dict[str, str]) -> None:
     for key, value in values.items():
-        if key in EDITABLE_KEYS:
+        if key not in EDITABLE_KEYS:
+            continue
+        current = getattr(settings, key, "")
+        if isinstance(current, bool):
+            setattr(settings, key, value.strip().lower() in ("1", "true", "yes", "on"))
+        elif isinstance(current, int):
+            try:
+                setattr(settings, key, int(value.strip() or 0))
+            except ValueError:
+                logger.warning("Érvénytelen szám a(z) %s kulcshoz: %r — kihagyva", key, value)
+        else:
             setattr(settings, key, value)
     if values:
         logger.info("Konfiguráció-felülírások alkalmazva: %s", ", ".join(sorted(values)))
@@ -97,9 +108,10 @@ def config_view() -> dict:
     values: dict[str, str] = {}
     secrets: dict[str, str | None] = {}
     for key in sorted(EDITABLE_KEYS):
-        current = getattr(settings, key, "") or ""
+        current = getattr(settings, key, "")
+        text = str(current) if not isinstance(current, str) else current
         if key in SECRET_KEYS:
-            secrets[key] = mask_secret(current)
+            secrets[key] = mask_secret(text)
         else:
-            values[key] = current
+            values[key] = text
     return {"values": values, "secrets": secrets}

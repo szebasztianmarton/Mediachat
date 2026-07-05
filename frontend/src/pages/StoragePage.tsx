@@ -32,6 +32,14 @@ interface CleanupResult {
   search_cache_keys_deleted: number;
 }
 
+interface TorrentLogEntry {
+  id: number;
+  name: string;
+  mode: "auto" | "manual";
+  size_bytes: number;
+  deleted_at: string | null;
+}
+
 const VOLUME_LABELS: Record<string, string> = {
   cache: "Cache",
   media: "Média",
@@ -42,8 +50,8 @@ function UsageBar({ used, total }: { used: number; total: number }) {
   const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
   return (
     <div style={{ width: "100%" }}>
-      <div style={{ height: 6, background: "#F0F0F0", borderRadius: 3, overflow: "hidden", border: "1px solid #E8E8E8" }}>
-        <div style={{ height: "100%", width: `${pct}%`, background: pct > 90 ? "#555555" : "#000000" }} />
+      <div style={{ height: 6, background: "var(--surface-2)", borderRadius: 3, overflow: "hidden", border: "1px solid var(--border-2)" }}>
+        <div style={{ height: "100%", width: `${pct}%`, background: pct > 90 ? "var(--warn)" : "var(--ink)" }} />
       </div>
       <p className="text-[10px] text-gray-400 mt-1">{pct}% használt</p>
     </div>
@@ -62,6 +70,8 @@ export default function StoragePage() {
   const [actionBusy, setActionBusy] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const [actionMsg, setActionMsg] = useState("");
+  const [torrentLog, setTorrentLog] = useState<TorrentLogEntry[]>([]);
+  const [autoDeleteHours, setAutoDeleteHours] = useState(0);
 
   const loadStatus = useCallback(async () => {
     setLoading(true);
@@ -90,7 +100,19 @@ export default function StoragePage() {
     }
   }, []);
 
-  useEffect(() => { loadStatus(); loadStale(); }, [loadStatus, loadStale]);
+  const loadTorrentLog = useCallback(async () => {
+    try {
+      const data = await api<{ entries: TorrentLogEntry[]; auto_delete_hours: number }>(
+        "/api/torrents/cleanup/log"
+      );
+      setTorrentLog(data.entries ?? []);
+      setAutoDeleteHours(data.auto_delete_hours ?? 0);
+    } catch {
+      setTorrentLog([]);
+    }
+  }, []);
+
+  useEffect(() => { loadStatus(); loadStale(); loadTorrentLog(); }, [loadStatus, loadStale, loadTorrentLog]);
 
   async function handleCleanup() {
     setCleaning(true);
@@ -161,20 +183,20 @@ export default function StoragePage() {
       <div className="flex-1 overflow-y-auto" style={{ padding: 24 }}>
 
         {error && (
-          <div className="card mb-6" style={{ padding: "12px 16px", background: "#F5F5F5", borderColor: "#D8D8D8" }}>
+          <div className="card mb-6" style={{ padding: "12px 16px", background: "var(--surface-2)", borderColor: "var(--border)" }}>
             <p className="text-xs text-gray-700">{error}</p>
           </div>
         )}
 
         {cleanupMsg && (
-          <div className="card mb-6" style={{ padding: "12px 16px", background: "#F0F0F0", borderColor: "#E0E0E0" }}>
+          <div className="card mb-6" style={{ padding: "12px 16px", background: "var(--surface-2)", borderColor: "var(--border)" }}>
             <p className="text-xs text-gray-700">{cleanupMsg}</p>
           </div>
         )}
 
         {/* Warnings */}
         {status && status.warnings.length > 0 && (
-          <div className="card mb-6" style={{ padding: "12px 16px", background: "#F5F5F5", borderColor: "#B0B0B0" }}>
+          <div className="card mb-6" style={{ padding: "12px 16px", background: "var(--surface-2)", borderColor: "var(--border-strong)" }}>
             {status.warnings.map((w) => (
               <p key={w} className="text-xs font-medium text-gray-800">⚠ {w}</p>
             ))}
@@ -221,7 +243,7 @@ export default function StoragePage() {
           </div>
 
           {actionMsg && (
-            <div style={{ padding: "10px 20px", borderBottom: "1px solid #E8E8E8", background: "#F5F5F5" }}>
+            <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border-2)", background: "var(--surface-2)" }}>
               <p className="text-xs text-gray-700">{actionMsg}</p>
             </div>
           )}
@@ -246,7 +268,7 @@ export default function StoragePage() {
               key={`${item.media_type}-${item.arr_id}`}
               style={{
                 padding: "12px 20px",
-                borderTop: idx > 0 ? "1px solid #E8E8E8" : "none",
+                borderTop: idx > 0 ? "1px solid var(--border-2)" : "none",
                 display: "flex",
                 alignItems: "center",
                 gap: 12,
@@ -280,6 +302,53 @@ export default function StoragePage() {
               </div>
             </div>
           ))}
+        </div>
+
+        {/* Torrent takarítási napló */}
+        <div className="card overflow-hidden mt-8">
+          <div className="card-header">
+            <h2 className="text-sm font-semibold text-gray-900" style={{ letterSpacing: "-0.01em" }}>
+              Torrent takarítási napló
+            </h2>
+            <span className={autoDeleteHours > 0 ? "badge badge-green" : "badge badge-gray"}>
+              {autoDeleteHours > 0 ? `Auto-törlés: ${autoDeleteHours} óra` : "Auto-törlés kikapcsolva"}
+            </span>
+          </div>
+
+          {torrentLog.length === 0 ? (
+            <div style={{ padding: "32px 20px", textAlign: "center" }}>
+              <p className="text-sm text-gray-400">Még nincs törölt torrent</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Az automatikus törlés a Beállítások → Torrent kliens szekcióban kapcsolható be (óra megadásával).
+              </p>
+            </div>
+          ) : (
+            <div>
+              {torrentLog.map((entry, idx) => (
+                <div
+                  key={entry.id}
+                  style={{
+                    padding: "10px 20px",
+                    borderTop: idx > 0 ? "1px solid var(--border-2)" : "none",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p className="text-sm text-gray-800 truncate" title={entry.name}>{entry.name}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {entry.deleted_at ? new Date(entry.deleted_at).toLocaleString("hu-HU") : "—"}
+                      {entry.size_bytes > 0 && ` · ${(entry.size_bytes / 1_073_741_824).toFixed(2)} GB`}
+                    </p>
+                  </div>
+                  <span className={entry.mode === "auto" ? "badge badge-amber" : "badge badge-gray"}>
+                    {entry.mode === "auto" ? "Automatikus" : "Kézi"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <p className="text-center text-xs text-gray-400 mt-6">

@@ -21,7 +21,7 @@ def test_rate_limiter_window_expiry():
     limiter = RateLimiter(max_requests=1, window_seconds=0.05)
     assert limiter.allow("k")
     assert not limiter.allow("k")
-    time.sleep(0.06)
+    time.sleep(0.2)  # bő margó — a Windows timer-felbontás ~15ms
     assert limiter.allow("k")
 
 
