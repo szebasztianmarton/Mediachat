@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 
+from app.services.backup import BackupService
 from app.services.cache import CacheService
 from app.services.history import HistoryService
+from app.services.library import LibraryService
 from app.services.media_sessions import MediaSessionsService
 from app.services.notifications import NotificationService
 from app.services.queue import QueueService
@@ -24,6 +26,8 @@ class AppState:
     media: MediaSessionsService
     history: HistoryService
     notifications: NotificationService
+    library: LibraryService
+    backup: BackupService
 
 
 app_state: AppState | None = None

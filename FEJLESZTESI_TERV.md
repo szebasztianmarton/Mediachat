@@ -1,6 +1,6 @@
 # Mediachat — Fejlesztési terv és állapotjelentés
 
-*Utolsó frissítés: 2026-07-05 (5. kör — P2 + biztonság + mobil/PWA)*
+*Utolsó frissítés: 2026-07-05 (6. kör — analitika, naptár, Settings-hub, backup, Jellyfin-fix)*
 
 ---
 
@@ -53,6 +53,16 @@ A 2026. júliusi nagy javítási kör (3 commit: `b8a4a13` → `70de1ef` → `ba
 - **Tesztek**: 16 pytest (auth flow, RBAC, rate limit, unit) + 11 Vitest (api kliens, auth util) — mind zöld
 - **CI**: GitHub Actions workflow (frontend: typecheck+test+build; backend: pytest)
 - UI: `tabular-nums`, EB Garamond a Login címen, `configured:false` őszinte widget-üzenetek
+
+### 6. kör (analitika, naptár, Settings-hub, backup) — 2026-07-05
+- **Jellyfin-fix**: a Settings `isConfigured` mostantól a SZERVER állapotát nézi (nem a titkos mezőt, ami újratöltéskor kiürül) — a Jellyfin (és minden titok-alapú szolgáltatás) helyesen konfiguráltnak látszik; a szerveren beállított szolgáltatások automatikusan bekapcsolnak és betöltéskor pingelődnek (zöld/piros)
+- **Dashboard analitika**: film/sorozat külön statisztikák (darab, tárhely, évad/epizód, átlag), CSP-biztos inline SVG chartok — donut (film vs sorozat tárhely-arány), area (14 napos hozzáadás-idősor), vízszintes bar (top műfajok); `GET /api/library/stats`
+- **Storage bővítés**: Sonarr/Radarr lemez-adatok (diskspace), film/sorozat összméret, top helyfoglalók vízszintes bar-charttal — sorozatoknál **évad-átlaggal** (méret/évad), filmeknél nem (egy fájl); `GET /api/library/storage`
+- **Naptár oldal** (`/calendar`): havi rács Sonarr/Radarr megjelenésekkel (film/epizód, letöltve-jelzés), hónap-navigáció; `GET /api/calendar`
+- **Settings-hub**: almenü (Szolgáltatások / Értesítések / Biztonsági mentés / Tanítás / Felhasználók) — a Tanítás és Felhasználók kikerült a fő sidebarból; a már beállított kulcsok maszkolva, nem üres mezőként
+- **Auto-backup**: napi automatikus mentés (users hash-elt jelszóval, config, tanítófájlok, beszélgetések) a `data/backups`-ba (utolsó 14), kézi indítás + lista a Settingsben; `GET /api/backups`, `POST /api/backups/create`
+- Chart-komponensek: `components/Charts.tsx` (DonutChart, AreaChart, HBarChart, UsageBar, fmtBytes)
+- Tesztek: 43 pytest (library, backup, calendar RBAC) + 11 Vitest; tsc 0 hiba, build OK
 
 ### 5. kör (P2 + biztonság + mobil/PWA) — 2026-07-05
 - **Letöltés-kész értesítés**: Sonarr/Radarr webhook (`POST /api/webhooks/{titok}/{sonarr|radarr}`) → Telegram/Discord bot + DB-napló; titok-alapú védelem; teszt gomb és cél-chat/csatorna mezők a Settingsben; `GET /api/notifications`

@@ -9,6 +9,7 @@ import TrainingPage from "./pages/TrainingPage";
 import RecommendationsPage from "./pages/RecommendationsPage";
 import StoragePage from "./pages/StoragePage";
 import JobsPage from "./pages/JobsPage";
+import CalendarPage from "./pages/CalendarPage";
 import SetupPage from "./pages/SetupPage";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { getAuth } from "./utils/auth";
@@ -33,10 +34,13 @@ export default function App() {
         <Route path="/setup" element={<RequireAuth><SetupPage /></RequireAuth>} />
         <Route path="/chat" element={<RequireAuth><ChatPage /></RequireAuth>} />
         <Route path="/recommendations" element={<RequireAuth><RecommendationsPage /></RequireAuth>} />
+        <Route path="/calendar" element={<RequireAuth><CalendarPage /></RequireAuth>} />
         <Route path="/dashboard" element={<RequireAdmin><DashboardPage /></RequireAdmin>} />
         <Route path="/storage" element={<RequireAdmin><StoragePage /></RequireAdmin>} />
         <Route path="/jobs" element={<RequireAdmin><JobsPage /></RequireAdmin>} />
         <Route path="/settings" element={<RequireAdmin><SettingsPage /></RequireAdmin>} />
+        <Route path="/settings/notifications" element={<RequireAdmin><SettingsPage /></RequireAdmin>} />
+        <Route path="/settings/backup" element={<RequireAdmin><SettingsPage /></RequireAdmin>} />
         <Route path="/logs" element={<RequireAdmin><LogsPage /></RequireAdmin>} />
         <Route path="/users" element={<RequireAdmin><UsersPage /></RequireAdmin>} />
         <Route path="/training" element={<RequireAdmin><TrainingPage /></RequireAdmin>} />

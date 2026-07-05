@@ -2,7 +2,35 @@ import { useState, useEffect, useCallback } from "react";
 import AppShell from "../components/AppShell";
 import { api, ApiError } from "../utils/api";
 import { useToast } from "../components/Toast";
+import { HBarChart, UsageBar as UsageBarChart, fmtBytes } from "../components/Charts";
 import { logger } from "../utils/logger";
+
+interface DiskInfo {
+  path: string;
+  total_bytes: number;
+  free_bytes: number;
+  used_bytes: number;
+}
+
+interface TopItem {
+  title: string;
+  year: number | null;
+  size_bytes: number;
+  seasons?: number;
+  episodes?: number;
+  avg_per_season_bytes?: number;
+  avg_per_episode_bytes?: number | null;
+}
+
+interface StorageAnalysis {
+  top_movies: TopItem[];
+  top_series: TopItem[];
+  disks: DiskInfo[];
+  movies_total_bytes: number;
+  series_total_bytes: number;
+  sonarr_configured: boolean;
+  radarr_configured: boolean;
+}
 
 interface Volume {
   name: string;
@@ -74,6 +102,7 @@ export default function StoragePage() {
   const [actionMsg, setActionMsg] = useState("");
   const [torrentLog, setTorrentLog] = useState<TorrentLogEntry[]>([]);
   const [autoDeleteHours, setAutoDeleteHours] = useState(0);
+  const [analysis, setAnalysis] = useState<StorageAnalysis | null>(null);
 
   const loadStatus = useCallback(async () => {
     setLoading(true);
@@ -114,7 +143,16 @@ export default function StoragePage() {
     }
   }, []);
 
-  useEffect(() => { loadStatus(); loadStale(); loadTorrentLog(); }, [loadStatus, loadStale, loadTorrentLog]);
+  const loadAnalysis = useCallback(async () => {
+    try {
+      const data = await api<StorageAnalysis>("/api/library/storage", { timeoutMs: 60_000 });
+      setAnalysis(data);
+    } catch {
+      setAnalysis(null);
+    }
+  }, []);
+
+  useEffect(() => { loadStatus(); loadStale(); loadTorrentLog(); loadAnalysis(); }, [loadStatus, loadStale, loadTorrentLog, loadAnalysis]);
 
   async function handleCleanup() {
     setCleaning(true);
@@ -241,6 +279,81 @@ export default function StoragePage() {
             </div>
           ))}
         </div>
+
+        {/* Sonarr/Radarr könyvtár-tárhely */}
+        {analysis && (analysis.radarr_configured || analysis.sonarr_configured) && (
+          <div className="mb-8">
+            <p className="section-label mb-3">Média könyvtár lemezei (Sonarr/Radarr)</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+              {analysis.disks.map((d) => (
+                <div key={d.path} className="card" style={{ padding: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
+                    <span className="text-xs text-gray-700 truncate" style={{ fontFamily: "monospace" }} title={d.path}>{d.path}</span>
+                    <span className="text-xs font-semibold text-gray-900 shrink-0">{fmtBytes(d.free_bytes)} szabad</span>
+                  </div>
+                  <UsageBarChart used={d.used_bytes} total={d.total_bytes} />
+                  <p className="text-[11px] text-gray-400 mt-1.5">{fmtBytes(d.used_bytes)} / {fmtBytes(d.total_bytes)} használt</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Film vs sorozat összméret */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="card p-4">
+                <p className="text-xs font-medium text-gray-500">Filmek összesen</p>
+                <p className="text-xl font-bold text-gray-900 mt-1">{fmtBytes(analysis.movies_total_bytes)}</p>
+              </div>
+              <div className="card p-4">
+                <p className="text-xs font-medium text-gray-500">Sorozatok összesen</p>
+                <p className="text-xl font-bold text-gray-900 mt-1">{fmtBytes(analysis.series_total_bytes)}</p>
+              </div>
+            </div>
+
+            {/* Top helyfoglaló sorozatok — évad-átlaggal */}
+            {analysis.top_series.length > 0 && (
+              <div className="card overflow-hidden mb-4">
+                <div className="card-header">
+                  <h2 className="text-sm font-semibold text-gray-900" style={{ letterSpacing: "-0.01em" }}>
+                    Legtöbb helyet foglaló sorozatok
+                  </h2>
+                  <span className="badge badge-gray">átlag / évad</span>
+                </div>
+                <div style={{ padding: "14px 20px" }}>
+                  <HBarChart
+                    barColor="var(--warn)"
+                    items={analysis.top_series.map((s) => ({
+                      label: s.title,
+                      value: s.size_bytes,
+                      valueLabel: fmtBytes(s.size_bytes),
+                      sublabel: `${s.seasons ?? 0} évad · átlag ${fmtBytes(s.avg_per_season_bytes ?? 0)}/évad`,
+                    }))}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Top helyfoglaló filmek — egy fájl, nincs évad-átlag */}
+            {analysis.top_movies.length > 0 && (
+              <div className="card overflow-hidden">
+                <div className="card-header">
+                  <h2 className="text-sm font-semibold text-gray-900" style={{ letterSpacing: "-0.01em" }}>
+                    Legtöbb helyet foglaló filmek
+                  </h2>
+                </div>
+                <div style={{ padding: "14px 20px" }}>
+                  <HBarChart
+                    items={analysis.top_movies.map((m) => ({
+                      label: m.title,
+                      value: m.size_bytes,
+                      valueLabel: fmtBytes(m.size_bytes),
+                      sublabel: m.year ? String(m.year) : undefined,
+                    }))}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Stale media */}
         <div className="card overflow-hidden">

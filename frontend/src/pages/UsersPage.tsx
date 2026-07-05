@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import AppShell from "../components/AppShell";
+import SettingsNav from "../components/SettingsNav";
 import { api, ApiError } from "../utils/api";
 import { getAuth } from "../utils/auth";
 import { logger } from "../utils/logger";
@@ -119,6 +120,8 @@ export default function UsersPage() {
           Felhasználó hozzáadása
         </button>
       </div>
+
+      <SettingsNav />
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto" style={{ padding: 24 }}>

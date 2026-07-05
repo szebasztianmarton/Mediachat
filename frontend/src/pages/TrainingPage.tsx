@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import AppShell from "../components/AppShell";
+import SettingsNav from "../components/SettingsNav";
 import { api, ApiError } from "../utils/api";
 import { logger } from "../utils/logger";
 
@@ -192,6 +193,7 @@ export default function TrainingPage() {
 
   return (
     <AppShell>
+      <SettingsNav />
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         {/* File list sidebar */}
         <aside

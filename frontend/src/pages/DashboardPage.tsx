@@ -4,6 +4,7 @@ import AppShell from "../components/AppShell";
 import { useServiceStatus } from "../hooks/useServiceStatus";
 import ServiceCard from "../components/ServiceCard";
 import StatusBadge from "../components/StatusBadge";
+import { AreaChart, DonutChart, HBarChart, fmtBytes } from "../components/Charts";
 import { api } from "../utils/api";
 import { logger } from "../utils/logger";
 
@@ -304,7 +305,6 @@ function TorrentWidget() {
 // ── Statisztika szekció ───────────────────────────────────────────────────────
 
 interface StatsData {
-  library: { movies: number | null; series: number | null };
   torrents: { total: number; downloading: number; seeding: number } | null;
   users: number;
   conversations: number;
@@ -314,23 +314,49 @@ interface StatsData {
   jobs: Record<string, number>;
 }
 
+interface LibraryStats {
+  movies: { count: number; with_file: number; missing: number; size_bytes: number; top_genres: { name: string; count: number }[] };
+  series: { count: number; seasons: number; episodes: number; size_bytes: number; top_genres: { name: string; count: number }[] };
+  combined: { total_size_bytes: number; top_genres: { name: string; count: number }[] };
+  sonarr_configured: boolean;
+  radarr_configured: boolean;
+}
+
+// ── Áttekintő csempe ──────────────────────────────────────────────────────────
+
+function Tile({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+  return (
+    <div className="card p-4">
+      <p className="text-xs font-medium text-gray-500" style={{ letterSpacing: "0.03em" }}>{label}</p>
+      <p className="text-2xl font-bold text-gray-900 mt-1" style={{ letterSpacing: "-0.03em" }}>{value}</p>
+      {sub && <p className="text-[11px] text-gray-400 mt-0.5">{sub}</p>}
+    </div>
+  );
+}
+
 function StatsSection() {
   const [stats, setStats] = useState<StatsData | null>(null);
+  const [lib, setLib] = useState<LibraryStats | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    api<StatsData>("/api/stats", { timeoutMs: 60_000 })
-      .then((data) => { if (!cancelled) setStats(data); })
-      .catch(() => { /* statisztika nélkül is él a dashboard */ })
-      .finally(() => { if (!cancelled) setLoading(false); });
+    Promise.all([
+      api<StatsData>("/api/stats", { timeoutMs: 60_000 }).catch(() => null),
+      api<LibraryStats>("/api/library/stats", { timeoutMs: 60_000 }).catch(() => null),
+    ]).then(([s, l]) => {
+      if (cancelled) return;
+      setStats(s);
+      setLib(l);
+      setLoading(false);
+    });
     return () => { cancelled = true; };
   }, []);
 
   if (loading) {
     return (
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-8">
-        {[0, 1, 2, 3, 4, 5].map((i) => (
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
+        {[0, 1, 2, 3].map((i) => (
           <div key={i} className="card p-4">
             <div className="skeleton" style={{ height: 10, width: "60%", marginBottom: 8 }} />
             <div className="skeleton" style={{ height: 22, width: "40%" }} />
@@ -339,53 +365,99 @@ function StatsSection() {
       </div>
     );
   }
-  if (!stats) return null;
 
-  const maxDay = Math.max(1, ...stats.adds_by_day.map((d) => d.count));
-  const tiles: { label: string; value: string | number }[] = [
-    { label: "Film a könyvtárban", value: stats.library.movies ?? "—" },
-    { label: "Sorozat", value: stats.library.series ?? "—" },
-    { label: "Hozzáadás összesen", value: stats.adds_total },
-    { label: "Aktív torrent", value: stats.torrents?.total ?? "—" },
-    { label: "Beszélgetés", value: stats.conversations },
-    { label: "Felhasználó", value: stats.users },
-  ];
+  const hasLib = lib && (lib.radarr_configured || lib.sonarr_configured);
+  const adds = stats?.adds_by_day ?? [];
 
   return (
-    <div className="mb-8">
-      <p className="section-label mb-3">Statisztika</p>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
-        {tiles.map((tile) => (
-          <div key={tile.label} className="card p-4">
-            <p className="text-xs font-medium text-gray-500" style={{ letterSpacing: "0.03em" }}>{tile.label}</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1" style={{ letterSpacing: "-0.03em" }}>{tile.value}</p>
+    <div className="mb-8" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* ── FILM statisztika ── */}
+      {lib && lib.radarr_configured && (
+        <div>
+          <p className="section-label mb-3">Filmek</p>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-3 lg:col-span-2" style={{ gridAutoRows: "min-content" }}>
+              <Tile label="Film összesen" value={lib.movies.count} />
+              <Tile label="Tárhely" value={fmtBytes(lib.movies.size_bytes)} />
+              <Tile label="Fájllal" value={lib.movies.with_file} sub={`${lib.movies.missing} hiányzó`} />
+              <Tile label="Átlag / film" value={lib.movies.with_file > 0 ? fmtBytes(lib.movies.size_bytes / lib.movies.with_file) : "—"} />
+            </div>
+            {lib.movies.top_genres.length > 0 && (
+              <div className="card p-4">
+                <p className="text-xs font-medium text-gray-500 mb-3">Top műfajok (film)</p>
+                <HBarChart items={lib.movies.top_genres.slice(0, 5).map((g) => ({ label: g.name, value: g.count, valueLabel: String(g.count) }))} />
+              </div>
+            )}
           </div>
-        ))}
+        </div>
+      )}
+
+      {/* ── SOROZAT statisztika ── */}
+      {lib && lib.sonarr_configured && (
+        <div>
+          <p className="section-label mb-3">Sorozatok</p>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-3 lg:col-span-2" style={{ gridAutoRows: "min-content" }}>
+              <Tile label="Sorozat összesen" value={lib.series.count} />
+              <Tile label="Tárhely" value={fmtBytes(lib.series.size_bytes)} />
+              <Tile label="Évadok" value={lib.series.seasons} sub={`${lib.series.episodes} epizód`} />
+              <Tile label="Átlag / évad" value={lib.series.seasons > 0 ? fmtBytes(lib.series.size_bytes / lib.series.seasons) : "—"} />
+            </div>
+            {lib.series.top_genres.length > 0 && (
+              <div className="card p-4">
+                <p className="text-xs font-medium text-gray-500 mb-3">Top műfajok (sorozat)</p>
+                <HBarChart items={lib.series.top_genres.slice(0, 5).map((g) => ({ label: g.name, value: g.count, valueLabel: String(g.count) }))} />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Áttekintés: arány + idősor ── */}
+      <div>
+        <p className="section-label mb-3">Áttekintés</p>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {hasLib && (
+            <div className="card p-4">
+              <p className="text-xs font-medium text-gray-500 mb-3">Tárhely megoszlás</p>
+              <DonutChart
+                centerValue={fmtBytes(lib!.combined.total_size_bytes)}
+                centerLabel="összesen"
+                slices={[
+                  { label: "Filmek", value: lib!.movies.size_bytes, color: "var(--primary-bg)" },
+                  { label: "Sorozatok", value: lib!.series.size_bytes, color: "var(--warn)" },
+                ]}
+              />
+            </div>
+          )}
+          {adds.length > 0 && (
+            <div className="card p-4">
+              <p className="text-xs font-medium text-gray-500 mb-3">Hozzáadások az elmúlt 14 napban</p>
+              <AreaChart
+                points={adds.map((d) => d.count)}
+                labels={[adds[0]?.date ?? "", adds[adds.length - 1]?.date ?? ""]}
+              />
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Hozzáadások az elmúlt 14 napban — mini oszlopdiagram */}
-      {stats.adds_by_day.length > 0 && (
-        <div className="card p-4">
-          <p className="text-xs font-medium text-gray-500 mb-3">Hozzáadások az elmúlt 14 napban</p>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 64 }}>
-            {stats.adds_by_day.map((day) => (
-              <div
-                key={day.date}
-                title={`${day.date}: ${day.count}`}
-                style={{
-                  flex: 1,
-                  height: `${Math.max(8, (day.count / maxDay) * 100)}%`,
-                  background: "var(--primary-bg)",
-                  borderRadius: 2,
-                  minWidth: 6,
-                }}
-              />
-            ))}
+      {/* ── Rendszer csempék ── */}
+      {stats && (
+        <div>
+          <p className="section-label mb-3">Rendszer</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <Tile label="Hozzáadás összesen" value={stats.adds_total} />
+            <Tile label="Aktív torrent" value={stats.torrents?.total ?? "—"} sub={stats.torrents ? `${stats.torrents.downloading} letölt · ${stats.torrents.seeding} seed` : undefined} />
+            <Tile label="Beszélgetés" value={stats.conversations} sub={`${stats.messages} üzenet`} />
+            <Tile label="Felhasználó" value={stats.users} />
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
-            <span className="text-[10px] text-gray-400">{stats.adds_by_day[0]?.date}</span>
-            <span className="text-[10px] text-gray-400">{stats.adds_by_day[stats.adds_by_day.length - 1]?.date}</span>
-          </div>
+        </div>
+      )}
+
+      {!hasLib && !stats && (
+        <div className="card" style={{ padding: "24px", textAlign: "center" }}>
+          <p className="text-sm text-gray-400">Nincs elérhető statisztikai adat. Konfiguráld a Sonarr/Radarr kapcsolatot.</p>
         </div>
       )}
     </div>

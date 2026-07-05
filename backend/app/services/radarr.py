@@ -93,6 +93,26 @@ class RadarrClient:
             response.raise_for_status()
             return response.json().get("records") or []
 
+    async def get_diskspace(self) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(f"{self.base_url}/api/v3/diskspace", headers=self._headers())
+            response.raise_for_status()
+            return response.json()
+
+    async def get_calendar(self, start: str, end: str) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.get(
+                f"{self.base_url}/api/v3/calendar",
+                headers=self._headers(),
+                params={"start": start, "end": end},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def get_movie(self, movie_id: int) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(

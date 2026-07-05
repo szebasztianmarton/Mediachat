@@ -493,6 +493,20 @@
     border: 1px solid var(--border);
   }
 
+  /* ── Settings almenü tabok ── */
+  .settings-tab {
+    padding: 11px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink-3);
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+    transition: color var(--speed), border-color var(--speed);
+  }
+  .settings-tab:hover { color: var(--ink); }
+  .settings-tab--active { color: var(--ink); border-bottom-color: var(--primary-bg); }
+
   /* ── Reszponzív shell: mobilon off-canvas sidebar ── */
   .app-sidebar { transform: translateX(0); }
   .mobile-only { display: none; }

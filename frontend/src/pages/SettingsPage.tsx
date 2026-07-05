@@ -1,10 +1,18 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import AppShell from "../components/AppShell";
+import SettingsNav from "../components/SettingsNav";
 import type { AppSettings } from "../types";
 import { DEFAULT_SETTINGS, SETTINGS_KEY } from "../types";
 import { api, ApiError } from "../utils/api";
 import { useToast } from "../components/Toast";
 import { logger } from "../utils/logger";
+
+interface BackupEntry {
+  file: string;
+  size_bytes: number;
+  mtime: number;
+}
 
 // Frontend mező ↔ backend config kulcs megfeleltetés. Ezek mentéskor a
 // szerverre kerülnek (/api/config) és azonnal érvénybe lépnek.
@@ -396,17 +404,75 @@ const BACKEND_TESTABLE = new Set<ServiceKey>([
   "sonarr", "radarr", "ollama", "tmdb", "torrent", "plex", "jellyfin",
 ]);
 
+// Szolgáltatás → szerver-oldali config kulcsok (value + opcionális secret).
+// Ezek alapján tudjuk, hogy a szerver szerint (env vagy UI) konfigurált-e —
+// nem a lokális input alapján, ami titkos mezőnél kiürül.
+const SERVER_CONFIG_KEYS: Partial<Record<ServiceKey, { value: string; secret?: string }>> = {
+  plex: { value: "plex_url", secret: "plex_token" },
+  jellyfin: { value: "jellyfin_url", secret: "jellyfin_api_key" },
+  sonarr: { value: "sonarr_url", secret: "sonarr_api_key" },
+  radarr: { value: "radarr_url", secret: "radarr_api_key" },
+  torrent: { value: "torrent_url" },
+  ollama: { value: "ollama_base_url" },
+  tmdb: { value: "tmdb_api_key", secret: "tmdb_api_key" },
+};
+
 export default function SettingsPage() {
   const toast = useToast();
+  const location = useLocation();
+  const view = location.pathname.endsWith("/notifications")
+    ? "notifications"
+    : location.pathname.endsWith("/backup")
+    ? "backup"
+    : "services";
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [testingNotify, setTestingNotify] = useState(false);
   const [serverSecrets, setServerSecrets] = useState<Record<string, string | null>>({});
+  const [serverValues, setServerValues] = useState<Record<string, string>>({});
   const [results, setResults] = useState<Record<string, ServiceTestResult>>(() =>
     Object.fromEntries(ALL_SERVICE_KEYS.map((k) => [k, { state: "untested" as ConnectionState }]))
   );
   const [testing, setTesting] = useState<Record<string, boolean>>({});
+  const [backups, setBackups] = useState<BackupEntry[]>([]);
+  const [backingUp, setBackingUp] = useState(false);
+  // A betöltő effect ezen keresztül hívja a testService-t (ami később definiált).
+  const autoTestRef = useRef<((k: ServiceKey) => void) | null>(null);
+
+  // Egy szolgáltatás akkor konfigurált, ha a SZERVER szerint be van állítva
+  // (env vagy UI) — nem a lokális input alapján. Így a Jellyfin sem tűnik el
+  // újratöltés után, amikor a titkos mező kiürül.
+  const serverConfigured = useCallback((serverKey: string, secretKey?: string): boolean => {
+    if (secretKey && serverSecrets[secretKey]) return true;
+    return !!(serverValues[serverKey] && serverValues[serverKey].trim());
+  }, [serverSecrets, serverValues]);
+
+  const loadBackups = useCallback(async () => {
+    try {
+      const data = await api<{ backups: BackupEntry[] }>("/api/backups");
+      setBackups(data.backups ?? []);
+    } catch {
+      setBackups([]);
+    }
+  }, []);
+
+  useEffect(() => { if (view === "backup") loadBackups(); }, [view, loadBackups]);
+
+  async function runBackup() {
+    setBackingUp(true);
+    try {
+      const res = await api<{ file: string; users: number; conversations: number }>("/api/backups/create", {
+        method: "POST", body: JSON.stringify({}), timeoutMs: 60_000,
+      });
+      toast.success(`Mentés kész: ${res.file} (${res.users} felhasználó, ${res.conversations} beszélgetés)`);
+      loadBackups();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "A mentés nem sikerült.");
+    } finally {
+      setBackingUp(false);
+    }
+  }
 
   // A szerver effektív konfigurációjának betöltése — a nem-titkos mezők
   // értéke bekerül az űrlapba, a titkosaknál a placeholder mutatja, hogy be vannak állítva.
@@ -416,13 +482,26 @@ export default function SettingsPage() {
       .then((cfg) => {
         if (cancelled) return;
         setServerSecrets(cfg.secrets);
+        setServerValues(cfg.values);
         setSettings((prev) => {
           const next: Record<string, unknown> = { ...prev };
           for (const { field, key, secret } of CONFIG_FIELD_MAP) {
             if (!secret && cfg.values[key] !== undefined) next[field] = cfg.values[key];
           }
+          // A szerveren konfigurált szolgáltatásokat automatikusan bekapcsoljuk,
+          // hogy ne "Letiltva" állapotban tűnjenek el (pl. Jellyfin).
+          for (const [svc, m] of Object.entries(SERVER_CONFIG_KEYS)) {
+            const set = (m.secret && cfg.secrets[m.secret]) || (cfg.values[m.value] || "").trim();
+            if (set) next[`${svc}Enabled`] = true;
+          }
           return next as unknown as AppSettings;
         });
+        // Konfigurált + tesztelhető szolgáltatások automatikus pingelése (zöld/piros).
+        for (const svc of BACKEND_TESTABLE) {
+          const m = SERVER_CONFIG_KEYS[svc];
+          const set = m && ((m.secret && cfg.secrets[m.secret]) || (cfg.values[m.value] || "").trim());
+          if (set) autoTestRef.current?.(svc);
+        }
       })
       .catch(() => { /* backend nélkül a localStorage értékek maradnak */ });
     return () => { cancelled = true; };
@@ -547,15 +626,25 @@ export default function SettingsPage() {
     }
   }, []);
 
+  autoTestRef.current = testService;
+
+  // Szerver-tudatos konfiguráltság: a szerver szerint beállított szolgáltatás
+  // akkor is konfiguráltnak számít, ha a lokális titkos mező üres.
+  const serviceConfigured = useCallback((key: ServiceKey): boolean => {
+    const map = SERVER_CONFIG_KEYS[key];
+    if (map && serverConfigured(map.value, map.secret)) return true;
+    return isConfigured(key, settings);
+  }, [serverConfigured, settings]);
+
   function cardResult(key: ServiceKey): ServiceTestResult {
     if (!settings[enabledKey(key)]) return { state: "disabled" };
-    if (!isConfigured(key, settings)) return { state: "unconfigured" };
+    if (!serviceConfigured(key)) return { state: "unconfigured" };
     return results[key] ?? { state: "untested" };
   }
 
   function summaryDotState(key: ServiceKey): ConnectionState {
     if (!settings[enabledKey(key)]) return "disabled";
-    if (!isConfigured(key, settings)) return "unconfigured";
+    if (!serviceConfigured(key)) return "unconfigured";
     return results[key]?.state ?? "untested";
   }
 
@@ -568,33 +657,39 @@ export default function SettingsPage() {
       <div className="page-topbar">
         <div className="flex-1">
           <h1 className="text-base font-semibold text-gray-900" style={{ letterSpacing: "-0.02em" }}>
-            Integrációk
+            Beállítások
           </h1>
-          <p className="text-xs text-gray-400 mt-0.5">Szolgáltatások konfigurálása és csatlakoztatása</p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {saved && (
-            <span className="text-xs text-gray-600 flex items-center gap-1">
-              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true"><path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" /></svg>
-              Mentve
-            </span>
-          )}
-          <button onClick={save} className="btn btn-primary btn-sm">
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
-            Mentés
-          </button>
-        </div>
+        {view !== "backup" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {saved && (
+              <span className="text-xs text-gray-600 flex items-center gap-1">
+                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true"><path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" /></svg>
+                Mentve
+              </span>
+            )}
+            <button onClick={save} className="btn btn-primary btn-sm">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
+              Mentés
+            </button>
+          </div>
+        )}
       </div>
+
+      <SettingsNav />
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto" style={{ padding: 24 }}>
 
+        {/* ══ SZOLGÁLTATÁSOK NÉZET ══ */}
+        {view === "services" && (<>
         {/* Info: mely szekciók mentődnek a szerverre */}
         <div className="card mb-6" style={{ padding: "12px 16px", background: "var(--surface-2)", borderColor: "var(--border)" }}>
           <p className="text-xs text-gray-700">
             A <strong>Sonarr, Radarr, Ollama, TMDB, Torrent, Plex és Jellyfin</strong> beállítások mentéskor a
             szerverre kerülnek és azonnal érvénybe lépnek (újraindításkor is megmaradnak, felülírják az <code style={{ fontFamily: "monospace" }}>.env</code>-et).
-            A többi szekció (Trakt, TrueNAS, Telegram, Discord) egyelőre csak ebben a böngészőben tárolódik.
+            A már beállított kulcsok maszkolva jelennek meg — csak akkor töltsd ki őket, ha módosítani akarod. A többi
+            szekció (Trakt, TrueNAS) egyelőre csak ebben a böngészőben tárolódik.
           </p>
         </div>
 
@@ -634,7 +729,7 @@ export default function SettingsPage() {
               iconPath="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z"
               enabled={settings.plexEnabled} onToggle={() => update("plexEnabled", !settings.plexEnabled)}
               result={cardResult("plex")} onTest={() => testService("plex")} isTesting={!!testing.plex}
-              startExpanded={!isConfigured("plex", settings)}>
+              startExpanded={!serviceConfigured("plex")}>
               <Field label="Plex URL" id="plex-url" value={settings.plexUrl} onChange={(v) => update("plexUrl", v)} placeholder="http://localhost:32400" helpText="A Plex Media Server elérhetősége a hálózaton" />
               <Field label="X-Plex-Token" id="plex-token" value={settings.plexToken} onChange={(v) => update("plexToken", v)} placeholder={secretPlaceholder("plex_token", "xxxxxxxxxxxxxxxxxxxx")} secret helpText="Plex web → ⋮ menü → Adatok megtekintése → URL-ben látható" />
             </ServiceCard>
@@ -643,7 +738,7 @@ export default function SettingsPage() {
               iconPath="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"
               enabled={settings.jellyfinEnabled} onToggle={() => update("jellyfinEnabled", !settings.jellyfinEnabled)}
               result={cardResult("jellyfin")} onTest={() => testService("jellyfin")} isTesting={!!testing.jellyfin}
-              startExpanded={!isConfigured("jellyfin", settings)}>
+              startExpanded={!serviceConfigured("jellyfin")}>
               <Field label="Jellyfin URL" id="jellyfin-url" value={settings.jellyfinUrl} onChange={(v) => update("jellyfinUrl", v)} placeholder="http://localhost:8096" />
               <Field label="API Kulcs" id="jellyfin-key" value={settings.jellyfinApiKey} onChange={(v) => update("jellyfinApiKey", v)} placeholder={secretPlaceholder("jellyfin_api_key", "abc123def456...")} secret helpText="Admin irányítópult → API Kulcsok → Kulcs hozzáadása" />
             </ServiceCard>
@@ -661,7 +756,7 @@ export default function SettingsPage() {
               iconPath="M15 10l4.553-2.069A1 1 0 0121 8.869V15.13a1 1 0 01-1.447.9L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"
               enabled={settings.sonarrEnabled} onToggle={() => update("sonarrEnabled", !settings.sonarrEnabled)}
               result={cardResult("sonarr")} onTest={() => testService("sonarr")} isTesting={!!testing.sonarr}
-              startExpanded={!isConfigured("sonarr", settings)}>
+              startExpanded={!serviceConfigured("sonarr")}>
               <Field label="Sonarr URL" id="sonarr-url" value={settings.sonarrUrl} onChange={(v) => update("sonarrUrl", v)} placeholder="http://localhost:8989" />
               <Field label="API Kulcs" id="sonarr-key" value={settings.sonarrApiKey} onChange={(v) => update("sonarrApiKey", v)} placeholder={secretPlaceholder("sonarr_api_key", "abc123...")} secret helpText="Beállítások → Általános → Biztonság" />
             </ServiceCard>
@@ -670,7 +765,7 @@ export default function SettingsPage() {
               iconPath="M7 4v16M17 4v16M3 8h4m10 0h4M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"
               enabled={settings.radarrEnabled} onToggle={() => update("radarrEnabled", !settings.radarrEnabled)}
               result={cardResult("radarr")} onTest={() => testService("radarr")} isTesting={!!testing.radarr}
-              startExpanded={!isConfigured("radarr", settings)}>
+              startExpanded={!serviceConfigured("radarr")}>
               <Field label="Radarr URL" id="radarr-url" value={settings.radarrUrl} onChange={(v) => update("radarrUrl", v)} placeholder="http://localhost:7878" />
               <Field label="API Kulcs" id="radarr-key" value={settings.radarrApiKey} onChange={(v) => update("radarrApiKey", v)} placeholder={secretPlaceholder("radarr_api_key", "abc123...")} secret helpText="Beállítások → Általános → Biztonság" />
             </ServiceCard>
@@ -679,7 +774,7 @@ export default function SettingsPage() {
               iconPath="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
               enabled={settings.torrentEnabled} onToggle={() => update("torrentEnabled", !settings.torrentEnabled)}
               result={cardResult("torrent")} onTest={() => testService("torrent")} isTesting={!!testing.torrent}
-              startExpanded={!isConfigured("torrent", settings)}>
+              startExpanded={!serviceConfigured("torrent")}>
               <div>
                 <p className="text-xs font-medium text-gray-600 mb-1.5">Kliens típusa</p>
                 <SegmentedControl value={settings.torrentClient} onChange={(v) => update("torrentClient", v)}
@@ -711,7 +806,7 @@ export default function SettingsPage() {
               iconPath="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
               enabled={settings.ollamaEnabled} onToggle={() => update("ollamaEnabled", !settings.ollamaEnabled)}
               result={cardResult("ollama")} onTest={() => testService("ollama")} isTesting={!!testing.ollama}
-              startExpanded={!isConfigured("ollama", settings)}>
+              startExpanded={!serviceConfigured("ollama")}>
               <Field label="Ollama URL" id="ollama-url" value={settings.ollamaUrl} onChange={(v) => update("ollamaUrl", v)} placeholder="http://localhost:11434" />
               <Field label="Modell" id="ollama-model" value={settings.ollamaModel} onChange={(v) => update("ollamaModel", v)} placeholder="llama3.2:3b" helpText="Telepített modellek listája: ollama list" />
             </ServiceCard>
@@ -720,7 +815,7 @@ export default function SettingsPage() {
               iconPath="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
               enabled={settings.tmdbEnabled} onToggle={() => update("tmdbEnabled", !settings.tmdbEnabled)}
               result={cardResult("tmdb")} onTest={() => testService("tmdb")} isTesting={!!testing.tmdb}
-              startExpanded={!isConfigured("tmdb", settings)}>
+              startExpanded={!serviceConfigured("tmdb")}>
               <Field label="API Kulcs (Bearer)" id="tmdb-key" value={settings.tmdbApiKey} onChange={(v) => update("tmdbApiKey", v)} placeholder={secretPlaceholder("tmdb_api_key", "eyJhbGci...")} secret helpText="themoviedb.org → Profil → Beállítások → API" />
             </ServiceCard>
 
@@ -728,7 +823,7 @@ export default function SettingsPage() {
               iconPath="M9 6.75V15m6-6v8.25m.503 3.498l4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 00-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0z"
               enabled={settings.traktEnabled} onToggle={() => update("traktEnabled", !settings.traktEnabled)}
               result={cardResult("trakt")} onTest={() => testService("trakt")} isTesting={!!testing.trakt}
-              startExpanded={!isConfigured("trakt", settings)}>
+              startExpanded={!serviceConfigured("trakt")}>
               <Field label="Client ID" id="trakt-id" value={settings.traktClientId} onChange={(v) => update("traktClientId", v)} placeholder="client_id..." helpText="trakt.tv → Beállítások → Alkalmazások → Új alkalmazás" />
               <Field label="Client Secret" id="trakt-secret" value={settings.traktClientSecret} onChange={(v) => update("traktClientSecret", v)} placeholder="secret..." secret />
             </ServiceCard>
@@ -746,7 +841,7 @@ export default function SettingsPage() {
               iconPath="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 2.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
               enabled={settings.truenasEnabled} onToggle={() => update("truenasEnabled", !settings.truenasEnabled)}
               result={cardResult("truenas")} onTest={() => testService("truenas")} isTesting={!!testing.truenas}
-              startExpanded={!isConfigured("truenas", settings)}>
+              startExpanded={!serviceConfigured("truenas")}>
               <Field label="TrueNAS URL" id="truenas-url" value={settings.truenasUrl} onChange={(v) => update("truenasUrl", v)} placeholder="http://truenas.local" />
               <div>
                 <p className="text-xs font-medium text-gray-600 mb-1.5">Hitelesítési mód</p>
@@ -767,7 +862,7 @@ export default function SettingsPage() {
               iconPath="M12 20.25c4.97 0 9-3.694 9-8.25s-4.03-8.25-9-8.25S3 7.444 3 12c0 2.104.859 4.023 2.273 5.48.432.447.74 1.04.586 1.641a4.483 4.483 0 01-.923 1.785A5.969 5.969 0 006 21c1.282 0 2.47-.402 3.445-1.087.81.22 1.668.337 2.555.337z"
               enabled={settings.telegramEnabled} onToggle={() => update("telegramEnabled", !settings.telegramEnabled)}
               result={cardResult("telegram")} onTest={() => testService("telegram")} isTesting={!!testing.telegram}
-              startExpanded={!isConfigured("telegram", settings)}>
+              startExpanded={!serviceConfigured("telegram")}>
               <Field label="Bot Token" id="telegram-token" value={settings.telegramBotToken} onChange={(v) => update("telegramBotToken", v)} placeholder="123456:ABC-DEF..." secret helpText="Telegram → @BotFather → /newbot → kapott token" />
             </ServiceCard>
 
@@ -775,13 +870,15 @@ export default function SettingsPage() {
               iconPath="M18 3a3 3 0 00-3 3v12a3 3 0 003 3 3 3 0 003-3 3 3 0 00-3-3H6a3 3 0 00-3 3 3 3 0 003 3 3 3 0 003-3V6a3 3 0 00-3-3 3 3 0 00-3 3 3 3 0 003 3h12a3 3 0 003-3 3 3 0 00-3-3z"
               enabled={settings.discordEnabled} onToggle={() => update("discordEnabled", !settings.discordEnabled)}
               result={cardResult("discord")} onTest={() => testService("discord")} isTesting={!!testing.discord}
-              startExpanded={!isConfigured("discord", settings)}>
+              startExpanded={!serviceConfigured("discord")}>
               <Field label="Bot Token" id="discord-token" value={settings.discordBotToken} onChange={(v) => update("discordBotToken", v)} placeholder="MTAx..." secret helpText="discord.com/developers → Alkalmazások → Bot → Token" />
             </ServiceCard>
           </div>
         </section>
 
-        {/* ── GROUP 5: Letöltés-kész értesítések ── */}
+        </>)}
+        {/* ══ ÉRTESÍTÉSEK NÉZET ══ */}
+        {view === "notifications" && (
         <section style={{ marginBottom: 32 }}>
           <GroupHeader
             title="Letöltés-kész értesítések"
@@ -825,22 +922,64 @@ export default function SettingsPage() {
             </div>
           </div>
         </section>
+        )}
 
-        {/* Footer */}
-        <div className="card" style={{ padding: "14px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
-          <button onClick={reset} className="btn btn-secondary">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
-            Visszaállítás
-          </button>
-          <button onClick={save} className="btn btn-primary">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
-            Integrációk mentése
-          </button>
-        </div>
+        {/* ══ BIZTONSÁGI MENTÉS NÉZET ══ */}
+        {view === "backup" && (
+          <div style={{ maxWidth: 640 }}>
+            <div className="card mb-4" style={{ padding: "14px 18px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-900">Automatikus adatmentés</h2>
+                  <p className="text-xs text-gray-500 mt-1" style={{ lineHeight: 1.6 }}>
+                    A szerver naponta automatikusan menti a felhasználókat (hash-elt jelszóval), a
+                    konfigurációt, a tanítófájlokat és a beszélgetéseket a <code style={{ fontFamily: "monospace" }}>data/backups</code> mappába
+                    (utolsó 14 megtartva). Kézzel is indíthatod:
+                  </p>
+                </div>
+                <button onClick={runBackup} disabled={backingUp} className="btn btn-primary btn-sm shrink-0">
+                  {backingUp ? "Mentés..." : "Mentés most"}
+                </button>
+              </div>
+            </div>
 
-        <p className="text-center text-xs text-gray-400 pb-4">
-          API kulcsok és jelszavak a böngésző localStorage-ban tárolódnak.
-        </p>
+            <div className="card overflow-hidden">
+              <div className="card-header">
+                <h2 className="text-sm font-semibold text-gray-900" style={{ letterSpacing: "-0.01em" }}>Elérhető mentések</h2>
+                <span className="badge badge-gray">{backups.length}</span>
+              </div>
+              {backups.length === 0 ? (
+                <div style={{ padding: "32px 20px", textAlign: "center" }}>
+                  <p className="text-sm text-gray-400">Még nincs mentés</p>
+                </div>
+              ) : (
+                backups.map((b, idx) => (
+                  <div key={b.file} style={{ padding: "10px 20px", borderTop: idx > 0 ? "1px solid var(--border-2)" : "none", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                    <span className="text-sm text-gray-800 truncate" style={{ fontFamily: "monospace" }}>{b.file}</span>
+                    <span className="text-xs text-gray-400 shrink-0">
+                      {new Date(b.mtime * 1000).toLocaleString("hu-HU", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                      {" · "}{(b.size_bytes / 1024).toFixed(0)} KB
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Footer — csak a menthető nézeteken */}
+        {view !== "backup" && (
+          <div className="card" style={{ padding: "14px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
+            <button onClick={reset} className="btn btn-secondary">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
+              Visszaállítás
+            </button>
+            <button onClick={save} className="btn btn-primary">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
+              Mentés
+            </button>
+          </div>
+        )}
       </div>
     </AppShell>
   );

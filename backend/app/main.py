@@ -54,8 +54,10 @@ from app.models import (
     UsersResponse,
 )
 from app.services import config_store
+from app.services.backup import BackupService
 from app.services.cache import CacheService
 from app.services.history import HistoryService
+from app.services.library import LibraryService
 from app.services.media_sessions import MediaSessionsService
 from app.services.notifications import NotificationService
 from app.services.ollama import OllamaClient, OllamaError, OllamaTimeout, OllamaUnavailable
@@ -129,6 +131,8 @@ async def lifespan(app: FastAPI):
         media=MediaSessionsService(),
         history=HistoryService(),
         notifications=NotificationService(),
+        library=LibraryService(),
+        backup=BackupService(),
     )
 
     async with SessionLocal() as db:
@@ -141,6 +145,9 @@ async def lifespan(app: FastAPI):
     # Befejezett torrentek időzített törlése (a settings-et körönként olvassa).
     cleanup_service = TorrentCleanupService(state.app_state.torrents)
     cleanup_task = asyncio.create_task(cleanup_service.run_loop())
+
+    # Napi automatikus adatmentés.
+    backup_task = asyncio.create_task(state.app_state.backup.run_loop())
 
     bot_tasks: list[asyncio.Task] = []
     if settings.telegram_enabled and settings.telegram_bot_token:
@@ -163,7 +170,8 @@ async def lifespan(app: FastAPI):
     await asyncio.gather(*bot_tasks, return_exceptions=True)
     warmup_task.cancel()
     cleanup_task.cancel()
-    await asyncio.gather(cleanup_task, return_exceptions=True)
+    backup_task.cancel()
+    await asyncio.gather(cleanup_task, backup_task, return_exceptions=True)
     await queue.stop()
     await cache.close()
     state.app_state = None
@@ -560,6 +568,8 @@ def _reload_service_clients(st: AppState) -> None:
     st.search.ollama = OllamaClient()
     st.storage.sonarr = SonarrClient()
     st.storage.radarr = RadarrClient()
+    st.library.sonarr = SonarrClient()
+    st.library.radarr = RadarrClient()
     # A TorrentService és a MediaSessionsService hívásonként olvassa a settings-et.
 
 
@@ -913,6 +923,42 @@ async def get_stats(
         "adds_by_day": adds_by_day,
         "jobs": jobs,
     }
+
+
+# ── Könyvtár-analitika + naptár + backup (admin) ─────────────────────────────
+
+
+@app.get("/api/library/stats")
+async def library_stats(_: UserSession = Depends(get_admin_session)) -> dict:
+    return await _state().library.stats()
+
+
+@app.get("/api/library/storage")
+async def library_storage(_: UserSession = Depends(get_admin_session)) -> dict:
+    return await _state().library.storage_analysis()
+
+
+@app.get("/api/calendar")
+async def calendar(
+    start: str,
+    end: str,
+    _: UserSession = Depends(get_required_session),
+) -> dict:
+    events = await _state().library.calendar(start, end)
+    return {"events": events}
+
+
+@app.get("/api/backups")
+async def list_backups(_: UserSession = Depends(get_admin_session)) -> dict:
+    return {"backups": _state().backup.list_backups()}
+
+
+@app.post("/api/backups/create")
+async def create_backup(request: Request, _: UserSession = Depends(get_admin_session)) -> dict:
+    from datetime import UTC, datetime
+
+    result = await _state().backup.create_backup(datetime.now(UTC).isoformat(timespec="seconds"))
+    return result
 
 
 # ── Storage (admin) ──────────────────────────────────────────────────────────
