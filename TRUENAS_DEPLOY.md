@@ -13,23 +13,40 @@ szükség előre feltöltött registry-image-ekre.
 ## 1. Előfeltételek
 
 - TrueNAS SCALE **24.10+**
-- Egy **dataset** az alkalmazás adatainak, pl. `tank/apps/mediachat`
+- Egy **saját pool** (pl. `NVME` vagy `HDD` — nézd meg: `zfs list -o name,mountpoint -d 2`)
 - SSH-hozzáférés bekapcsolva (**System Settings → Services → SSH**), vagy a
   beépített **Shell** (System Settings → Shell)
 - Elérhető **Sonarr** és **Radarr** (API kulccsal). Opcionálisan Jellyfin/Plex,
   qBittorrent/Transmission, TMDB kulcs.
 
+> Ha már fut nálad a TrueNAS natív **Apps** rendszer (látod az `ix-apps`
+> datasetet `/mnt/.ix-apps` alatt), a Docker már telepítve van — elég
+> ellenőrizni: `docker compose version`.
+
 ---
 
-## 2. A repó a poolra
+## 2. Dataset létrehozása + a repó klónozása
 
-SSH-val lépj be a NAS-ra, majd klónozd a projektet a datasetbe:
+Először hozz létre egy **saját datasetet** a projektnek (ne a médiafájlokat
+tartalmazó pool/dataset alá tedd). Gyorsabb SSD/NVME pool esetén ott érdemes
+(az adatbázis és az Ollama cache profitál belőle):
 
 ```bash
-cd /mnt/tank/apps          # a saját pool/dataset útvonalad
-git clone https://github.com/szebasztianmarton/Mediachat.git mediachat
-cd mediachat
+sudo zfs create NVME/mediachat        # cseréld a saját pool nevedre, ha nem NVME
+cd /mnt/NVME/mediachat
 ```
+
+> Vagy a webes felületről: **Datasets → (a poolod) → Add Dataset**, név:
+> `mediachat`. Utána SSH-ban `cd /mnt/<POOL>/mediachat`.
+
+Ezután klónozd a repót **ebbe** a mappába:
+
+```bash
+git clone https://github.com/szebasztianmarton/Mediachat.git .
+```
+
+> A parancs végén a `.` fontos — így közvetlenül ide klónoz, nem hoz létre egy
+> újabb `Mediachat` almappát.
 
 > **A repó privát** — a sima `git clone` felhasználónevet/jelszót fog kérni, a
 > GitHub pedig jelszóval már nem enged be, **Personal Access Tokent** (PAT) kér
@@ -155,7 +172,7 @@ egy tartalom ténylegesen letöltődött.
 ## 9. Frissítés (új verzió)
 
 ```bash
-cd /mnt/tank/apps/mediachat
+cd /mnt/NVME/mediachat        # a saját pool/dataset útvonalad
 git pull
 docker compose -f docker-compose.truenas.yml up -d --build
 ```
