@@ -15,9 +15,10 @@ const CONFIG_FIELD_MAP: Array<{ field: keyof AppSettings; key: string; secret: b
   { field: "ollamaUrl", key: "ollama_base_url", secret: false },
   { field: "ollamaModel", key: "ollama_model", secret: false },
   { field: "tmdbApiKey", key: "tmdb_api_key", secret: true },
-  { field: "torrentUrl", key: "qbittorrent_url", secret: false },
-  { field: "torrentUsername", key: "qbittorrent_username", secret: false },
-  { field: "torrentPassword", key: "qbittorrent_password", secret: true },
+  { field: "torrentClient", key: "torrent_client", secret: false },
+  { field: "torrentUrl", key: "torrent_url", secret: false },
+  { field: "torrentUsername", key: "torrent_username", secret: false },
+  { field: "torrentPassword", key: "torrent_password", secret: true },
   { field: "plexUrl", key: "plex_url", secret: false },
   { field: "plexToken", key: "plex_token", secret: true },
   { field: "jellyfinUrl", key: "jellyfin_url", secret: false },
@@ -29,7 +30,7 @@ interface ConfigView {
   secrets: Record<string, string | null>;
 }
 
-type ConnectionState = "online" | "offline" | "checking" | "unconfigured" | "disabled";
+type ConnectionState = "online" | "offline" | "checking" | "unconfigured" | "untested" | "disabled";
 
 interface ServiceTestResult {
   state: ConnectionState;
@@ -50,6 +51,7 @@ function loadSettings(): AppSettings {
 function StatusChip({ state, latencyMs }: { state: ConnectionState; latencyMs?: number }) {
   if (state === "disabled")     return <span className="badge badge-gray">Letiltva</span>;
   if (state === "unconfigured") return <span className="badge badge-gray">Nincs konfigurálva</span>;
+  if (state === "untested")     return <span className="badge badge-gray">Nem tesztelt</span>;
   if (state === "checking")     return <span className="badge badge-amber">Ellenőrzés...</span>;
   if (state === "offline")      return <span className="badge badge-red">Offline</span>;
   return (
@@ -384,13 +386,10 @@ function enabledKey(key: ServiceKey): keyof AppSettings {
   return `${key}Enabled` as keyof AppSettings;
 }
 
-// A backend /health végpontja csak ezeket a szolgáltatásokat ellenőrzi.
-const HEALTH_TESTABLE: Partial<Record<ServiceKey, string>> = {
-  sonarr: "sonarr",
-  radarr: "radarr",
-  ollama: "ollama",
-  tmdb: "tmdb",
-};
+// Ezeket a backend aktívan tudja tesztelni (POST /api/config/test/{service}).
+const BACKEND_TESTABLE = new Set<ServiceKey>([
+  "sonarr", "radarr", "ollama", "tmdb", "torrent", "plex", "jellyfin",
+]);
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
@@ -398,7 +397,7 @@ export default function SettingsPage() {
   const [saveError, setSaveError] = useState("");
   const [serverSecrets, setServerSecrets] = useState<Record<string, string | null>>({});
   const [results, setResults] = useState<Record<string, ServiceTestResult>>(() =>
-    Object.fromEntries(ALL_SERVICE_KEYS.map((k) => [k, { state: "unconfigured" as ConnectionState }]))
+    Object.fromEntries(ALL_SERVICE_KEYS.map((k) => [k, { state: "untested" as ConnectionState }]))
   );
   const [testing, setTesting] = useState<Record<string, boolean>>({});
 
@@ -480,14 +479,12 @@ export default function SettingsPage() {
   }
 
   const testService = useCallback(async (key: ServiceKey) => {
-    // A backend /health lapos objektumot ad vissza, és csak ezeket ismeri.
-    const healthField = HEALTH_TESTABLE[key];
-    if (!healthField) {
+    if (!BACKEND_TESTABLE.has(key)) {
       setResults((p) => ({
         ...p,
         [key]: {
-          state: "unconfigured",
-          error: "Ezt a szolgáltatást a backend nem ellenőrzi — a konfiguráció a szerver .env fájljában történik.",
+          state: "untested",
+          error: "Ezt a szolgáltatást a backend még nem tudja tesztelni.",
         },
       }));
       logger.info("service", `${SERVICE_LABELS[key]}: backendből nem tesztelhető`);
@@ -498,25 +495,22 @@ export default function SettingsPage() {
     setResults((p) => ({ ...p, [key]: { state: "checking" } }));
     logger.info("service", `Kapcsolat tesztelése: ${SERVICE_LABELS[key]}`);
 
-    const t0 = performance.now();
     try {
-      const res = await fetch("/health");
-      const latencyMs = Math.round(performance.now() - t0);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as Record<string, boolean | string | null>;
-      const ok = !!data[healthField];
-      const errField = data[`${healthField}_error`];
+      const data = await api<{ ok: boolean; message?: string | null; latency_ms: number }>(
+        `/api/config/test/${key}`,
+        { method: "POST", body: JSON.stringify({}), timeoutMs: 60_000 }
+      );
       setResults((p) => ({
         ...p,
         [key]: {
-          state: ok ? "online" : "offline",
-          latencyMs: ok ? latencyMs : undefined,
-          error: ok ? undefined : (typeof errField === "string" ? errField : "A szolgáltatás nem érhető el"),
+          state: data.ok ? "online" : "offline",
+          latencyMs: data.ok ? data.latency_ms : undefined,
+          error: data.ok ? undefined : (data.message ?? "A szolgáltatás nem érhető el"),
         },
       }));
-      logger[ok ? "success" : "warn"]("service", `${SERVICE_LABELS[key]}: ${ok ? "online" : "offline"}`);
+      logger[data.ok ? "success" : "warn"]("service", `${SERVICE_LABELS[key]}: ${data.ok ? "online" : "offline"}`);
     } catch (e) {
-      const error = e instanceof Error ? e.message : "Kapcsolati hiba";
+      const error = e instanceof ApiError ? e.message : "Kapcsolati hiba";
       setResults((p) => ({ ...p, [key]: { state: "offline", error } }));
       logger.error("service", `${SERVICE_LABELS[key]} teszt sikertelen`, error);
     } finally {
@@ -527,13 +521,13 @@ export default function SettingsPage() {
   function cardResult(key: ServiceKey): ServiceTestResult {
     if (!settings[enabledKey(key)]) return { state: "disabled" };
     if (!isConfigured(key, settings)) return { state: "unconfigured" };
-    return results[key] ?? { state: "unconfigured" };
+    return results[key] ?? { state: "untested" };
   }
 
   function summaryDotState(key: ServiceKey): ConnectionState {
     if (!settings[enabledKey(key)]) return "disabled";
     if (!isConfigured(key, settings)) return "unconfigured";
-    return results[key]?.state ?? "unconfigured";
+    return results[key]?.state ?? "untested";
   }
 
   const onlineCount = ALL_SERVICE_KEYS.filter((k) => results[k]?.state === "online" && settings[enabledKey(k)]).length;
@@ -664,7 +658,7 @@ export default function SettingsPage() {
               </div>
               <Field label="Web UI URL" id="torrent-url" value={settings.torrentUrl} onChange={(v) => update("torrentUrl", v)} placeholder="http://localhost:8080" />
               <Field label="Felhasználónév" id="torrent-user" value={settings.torrentUsername} onChange={(v) => update("torrentUsername", v)} placeholder="admin" />
-              <Field label="Jelszó" id="torrent-pass" value={settings.torrentPassword} onChange={(v) => update("torrentPassword", v)} placeholder={secretPlaceholder("qbittorrent_password", "••••••••")} secret />
+              <Field label="Jelszó" id="torrent-pass" value={settings.torrentPassword} onChange={(v) => update("torrentPassword", v)} placeholder={secretPlaceholder("torrent_password", "••••••••")} secret />
             </ServiceCard>
           </div>
         </section>

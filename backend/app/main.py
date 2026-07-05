@@ -55,12 +55,12 @@ from app.services.cache import CacheService
 from app.services.history import HistoryService
 from app.services.media_sessions import MediaSessionsService
 from app.services.ollama import OllamaClient, OllamaError, OllamaTimeout, OllamaUnavailable
-from app.services.qbittorrent import QbittorrentClient
 from app.services.queue import QueueService
 from app.services.radarr import RadarrClient
 from app.services.ratelimit import RateLimiter
 from app.services.sonarr import SonarrClient
-from app.services.tmdb import TmdbClient
+from app.services.tmdb import TmdbClient, TmdbError
+from app.services.torrents import TorrentService
 from app.services.recommendations import RecommendationService
 from app.services.search import SearchService
 from app.services.session import SessionService
@@ -120,7 +120,7 @@ async def lifespan(app: FastAPI):
         recommendations=recommendations,
         storage=storage,
         session=session_service,
-        torrents=QbittorrentClient(),
+        torrents=TorrentService(),
         media=MediaSessionsService(),
         history=HistoryService(),
     )
@@ -521,13 +521,74 @@ def _reload_service_clients(st: AppState) -> None:
     st.search.ollama = OllamaClient()
     st.storage.sonarr = SonarrClient()
     st.storage.radarr = RadarrClient()
-    st.torrents = QbittorrentClient()
-    # A MediaSessionsService hívásonként olvassa a settings-et — nem kell újraépíteni.
+    # A TorrentService és a MediaSessionsService hívásonként olvassa a settings-et.
 
 
 @app.get("/api/config", response_model=ConfigResponse)
 async def get_config(_: UserSession = Depends(get_admin_session)) -> ConfigResponse:
     return ConfigResponse(**config_store.config_view())
+
+
+_TESTABLE_SERVICES = {"sonarr", "radarr", "ollama", "tmdb", "torrent", "plex", "jellyfin"}
+
+
+@app.post("/api/config/test/{service}")
+async def test_service_connection(
+    service: str,
+    _: UserSession = Depends(get_admin_session),
+) -> dict:
+    """Aktív kapcsolat-teszt az adott szolgáltatásra a jelenlegi effektív
+    konfigurációval (a Settings oldal Kapcsolat tesztelése gombja)."""
+    if service not in _TESTABLE_SERVICES:
+        raise HTTPException(status_code=404, detail="Ez a szolgáltatás nem tesztelhető a backendből.")
+
+    st = _state()
+    import time as _time
+
+    start = _time.monotonic()
+    ok = False
+    message: str | None = None
+
+    try:
+        if service == "sonarr":
+            ok, message = await st.search.sonarr.ping()
+        elif service == "radarr":
+            ok, message = await st.search.radarr.ping()
+        elif service == "ollama":
+            ok, message = await st.search.ollama.ping()
+        elif service == "tmdb":
+            if not st.search.tmdb.configured:
+                message = "Nincs konfigurálva (TMDB_API_KEY hiányzik)"
+            else:
+                try:
+                    await st.search.tmdb._get("/configuration")  # noqa: SLF001
+                    ok = True
+                except TmdbError as exc:
+                    message = str(exc)
+        elif service == "torrent":
+            if not st.torrents.configured:
+                message = "Nincs konfigurálva (Web UI URL hiányzik)"
+            else:
+                await st.torrents.list_torrents()
+                ok = True
+        elif service == "plex":
+            if not (settings.plex_url and settings.plex_token):
+                message = "Nincs konfigurálva (URL vagy token hiányzik)"
+            else:
+                await st.media._plex_sessions()  # noqa: SLF001
+                ok = True
+        elif service == "jellyfin":
+            if not (settings.jellyfin_url and settings.jellyfin_api_key):
+                message = "Nincs konfigurálva (URL vagy API kulcs hiányzik)"
+            else:
+                await st.media._jellyfin_sessions()  # noqa: SLF001
+                ok = True
+    except Exception as exc:  # noqa: BLE001
+        ok = False
+        message = str(exc) or "Kapcsolati hiba"
+
+    latency_ms = round((_time.monotonic() - start) * 1000)
+    return {"ok": ok, "message": message, "latency_ms": latency_ms}
 
 
 @app.put("/api/config", response_model=ConfigResponse)
@@ -570,7 +631,10 @@ async def torrents(_: UserSession = Depends(get_required_session)) -> dict:
     try:
         items = await st.torrents.list_torrents()
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"qBittorrent nem érhető el: {exc}") from exc
+        raise HTTPException(
+            status_code=502,
+            detail=f"A torrent kliens ({st.torrents.client_type}) nem érhető el: {exc}",
+        ) from exc
     return {"torrents": items, "configured": True}
 
 

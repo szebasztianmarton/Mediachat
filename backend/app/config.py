@@ -60,10 +60,11 @@ class Settings(BaseSettings):
     # Vesszővel elválasztott guild (szerver) ID-k; üresen hagyva minden szerver engedélyezett.
     discord_allowed_guild_ids: str = ""
 
-    # Torrent kliens (qBittorrent Web API)
-    qbittorrent_url: str = ""
-    qbittorrent_username: str = ""
-    qbittorrent_password: str = ""
+    # Torrent kliens (qbittorrent | transmission)
+    torrent_client: str = "qbittorrent"
+    torrent_url: str = ""
+    torrent_username: str = ""
+    torrent_password: str = ""
 
     # Media szerverek ("Most nézi" widget)
     plex_url: str = ""

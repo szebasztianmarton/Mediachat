@@ -18,7 +18,7 @@ os.environ["RADARR_URL"] = ""
 os.environ["RADARR_API_KEY"] = ""
 os.environ["TMDB_API_KEY"] = ""
 os.environ["OLLAMA_BASE_URL"] = ""
-os.environ["QBITTORRENT_URL"] = ""
+os.environ["TORRENT_URL"] = ""
 os.environ["PLEX_URL"] = ""
 os.environ["JELLYFIN_URL"] = ""
 

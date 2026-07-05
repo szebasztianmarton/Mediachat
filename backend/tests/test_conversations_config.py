@@ -134,6 +134,42 @@ def test_config_get_and_update(client, admin_token):
     assert res.status_code == 400
 
 
+def test_config_test_endpoint(client, admin_token):
+    # Nem tesztelhető szolgáltatás → 404
+    res = client.post("/api/config/test/trakt", headers=_headers(admin_token))
+    assert res.status_code == 404
+
+    # Nem konfigurált sonarr → ok:false, értelmes üzenettel (nem 500)
+    res = client.post("/api/config/test/sonarr", headers=_headers(admin_token))
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is False
+    assert body["message"]
+
+    # Nem konfigurált torrent → ok:false
+    res = client.post("/api/config/test/torrent", headers=_headers(admin_token))
+    assert res.status_code == 200
+    assert res.json()["ok"] is False
+
+
+def test_config_torrent_client_editable(client, admin_token):
+    res = client.put(
+        "/api/config",
+        headers=_headers(admin_token),
+        json={"values": {"torrent_client": "transmission", "torrent_url": "http://tr.test:9090"}},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["values"]["torrent_client"] == "transmission"
+    assert body["values"]["torrent_url"] == "http://tr.test:9090"
+    # Visszaállítás, hogy a többi tesztet ne érintse
+    client.put(
+        "/api/config",
+        headers=_headers(admin_token),
+        json={"values": {"torrent_client": "qbittorrent", "torrent_url": ""}},
+    )
+
+
 def test_config_requires_admin(client, admin_token):
     client.post(
         "/api/users",
