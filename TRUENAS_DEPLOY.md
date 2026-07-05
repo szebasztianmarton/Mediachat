@@ -23,16 +23,34 @@ szükség előre feltöltött registry-image-ekre.
 
 ## 2. A repó a poolra
 
-SSH-val lépj be a NAS-ra, majd klónozd (vagy másold) a projektet a datasetbe:
+SSH-val lépj be a NAS-ra, majd klónozd a projektet a datasetbe:
 
 ```bash
 cd /mnt/tank/apps          # a saját pool/dataset útvonalad
-git clone <REPO_URL> mediachat
+git clone https://github.com/szebasztianmarton/Mediachat.git mediachat
 cd mediachat
 ```
 
-> Ha nincs git a NAS-on, csomagold a projektet zip-be a gépeden, töltsd fel a
-> datasetbe (SMB/SCP), és bontsd ki ide.
+> **A repó privát** — a sima `git clone` felhasználónevet/jelszót fog kérni, a
+> GitHub pedig jelszóval már nem enged be, **Personal Access Tokent** (PAT) kér
+> jelszó helyett:
+> 1. GitHubon: **Settings → Developer settings → Personal access tokens →
+>    Fine-grained tokens → Generate new token**, csak a `Mediachat` repóra,
+>    `Contents: Read-only` joggal.
+> 2. A klónozásnál felhasználónévnek add meg a GitHub felhasználóneved, jelszónak
+>    a generált tokent.
+> 3. Vagy egyszerűbben, írd bele a tokent az URL-be (ne oszd meg máshol, mert a
+>    shell historyban is megmarad):
+>    `git clone https://<TOKEN>@github.com/szebasztianmarton/Mediachat.git mediachat`
+>
+> `git pull`-nál (frissítéskor) a token ugyanígy szükséges, hacsak nem
+> `git config credential.helper store`-ral elmentetted egyszer.
+
+> Ha a NAS-on nincs `git` parancs: **System Settings → Advanced → Init/Shutdown
+> Scripts**-szel sem éri meg bajlódni — a legtöbb TrueNAS SCALE image-ben git
+> már eleve telepítve van. Ha mégsem, `apt install git` nem működik (a NAS
+> read-only base OS-en fut) — ilyenkor tölts le egy git-tartalmazó Docker
+> image-et, vagy csomagold zip-be a repót és töltsd fel SMB/SCP-vel.
 
 ---
 
