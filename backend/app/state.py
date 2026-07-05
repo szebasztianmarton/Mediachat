@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from app.services.backup import BackupService
 from app.services.cache import CacheService
 from app.services.history import HistoryService
+from app.services.jellyfin import JellyfinClient
 from app.services.library import LibraryService
 from app.services.media_sessions import MediaSessionsService
 from app.services.notifications import NotificationService
@@ -28,6 +29,7 @@ class AppState:
     notifications: NotificationService
     library: LibraryService
     backup: BackupService
+    jellyfin: JellyfinClient
 
 
 app_state: AppState | None = None

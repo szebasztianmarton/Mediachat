@@ -57,6 +57,7 @@ from app.services import config_store
 from app.services.backup import BackupService
 from app.services.cache import CacheService
 from app.services.history import HistoryService
+from app.services.jellyfin import JellyfinClient, JellyfinError
 from app.services.library import LibraryService
 from app.services.media_sessions import MediaSessionsService
 from app.services.notifications import NotificationService
@@ -133,6 +134,7 @@ async def lifespan(app: FastAPI):
         notifications=NotificationService(),
         library=LibraryService(),
         backup=BackupService(),
+        jellyfin=JellyfinClient(),
     )
 
     async with SessionLocal() as db:
@@ -284,11 +286,37 @@ async def create_user(
     _: UserSession = Depends(get_admin_session),
     db: AsyncSession = Depends(get_db),
 ) -> UserInfo:
+    st = _state()
     try:
-        user = await _state().session.create_user(db, payload.username, payload.password, payload.role)
+        user = await st.session.create_user(db, payload.username, payload.password, payload.role)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Opcionális: a felhasználó létrehozása a Jellyfinben is
+    if payload.provision_jellyfin and st.jellyfin.configured:
+        try:
+            await st.jellyfin.create_user(payload.username, payload.password)
+            logger.info("Jellyfin felhasználó is létrehozva: %s", payload.username)
+        except JellyfinError as exc:
+            # A helyi user már létrejött — csak jelezzük a Jellyfin-hibát
+            raise HTTPException(
+                status_code=207,
+                detail=f"A helyi felhasználó létrejött, de a Jellyfinben nem: {exc}",
+            ) from exc
+
     return _user_info(user)
+
+
+@app.get("/api/provisioning/targets")
+async def provisioning_targets(_: UserSession = Depends(get_admin_session)) -> dict:
+    """Mely külső rendszerekbe tudunk most felhasználót létrehozni."""
+    st = _state()
+    return {
+        "jellyfin": st.jellyfin.configured,
+        # Plex: a self-hosted Plex nem támogat API-alapú user-létrehozást
+        # (managed/home user-ekhez plex.tv OAuth kell) — ezért nem elérhető.
+        "plex": False,
+    }
 
 
 @app.delete("/api/users/{user_id}")
@@ -570,6 +598,7 @@ def _reload_service_clients(st: AppState) -> None:
     st.storage.radarr = RadarrClient()
     st.library.sonarr = SonarrClient()
     st.library.radarr = RadarrClient()
+    st.jellyfin = JellyfinClient()
     # A TorrentService és a MediaSessionsService hívásonként olvassa a settings-et.
 
 
@@ -935,7 +964,27 @@ async def library_stats(_: UserSession = Depends(get_admin_session)) -> dict:
 
 @app.get("/api/library/storage")
 async def library_storage(_: UserSession = Depends(get_admin_session)) -> dict:
-    return await _state().library.storage_analysis()
+    data = await _state().library.storage_analysis()
+    # Össz-tárhely aggregáció (a média-lemezekből)
+    disks = data.get("disks", [])
+    data["total_bytes"] = sum(d["total_bytes"] for d in disks)
+    data["used_bytes"] = sum(d["used_bytes"] for d in disks)
+    data["free_bytes"] = sum(d["free_bytes"] for d in disks)
+    return data
+
+
+@app.get("/api/jellyfin/analytics")
+async def jellyfin_analytics(_: UserSession = Depends(get_admin_session)) -> dict:
+    st = _state()
+    if not st.jellyfin.configured:
+        return {"configured": False, "users": []}
+    # Rövid cache (60 s) — a per-user lekérdezés drága (userenként 2 hívás).
+    cached = await st.cache.get_json("jellyfin:analytics")
+    if cached:
+        return cached
+    data = await st.jellyfin.watch_analytics()
+    await st.cache.set_json("jellyfin:analytics", data, ttl=60)
+    return data
 
 
 @app.get("/api/calendar")

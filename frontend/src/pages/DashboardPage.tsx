@@ -464,6 +464,200 @@ function StatsSection() {
   );
 }
 
+// ── Össz-tárhely szekció ──────────────────────────────────────────────────────
+
+interface StorageAgg {
+  disks: { path: string; total_bytes: number; used_bytes: number; free_bytes: number }[];
+  total_bytes: number;
+  used_bytes: number;
+  free_bytes: number;
+  movies_total_bytes: number;
+  series_total_bytes: number;
+  radarr_configured: boolean;
+  sonarr_configured: boolean;
+}
+
+function TotalStorageSection() {
+  const [data, setData] = useState<StorageAgg | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api<StorageAgg>("/api/library/storage", { timeoutMs: 60_000 })
+      .then((d) => { if (!cancelled) setData(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  if (!data || (!data.radarr_configured && !data.sonarr_configured)) return null;
+  const usedPct = data.total_bytes > 0 ? Math.round((data.used_bytes / data.total_bytes) * 100) : 0;
+
+  return (
+    <div className="mb-8">
+      <p className="section-label mb-3">Össztárhely</p>
+      <div className="card p-5">
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <div>
+            <span className="text-2xl font-bold text-gray-900">{fmtBytes(data.used_bytes)}</span>
+            <span className="text-sm text-gray-400"> / {fmtBytes(data.total_bytes)} használt ({usedPct}%)</span>
+          </div>
+          <span className="text-sm text-gray-500">{fmtBytes(data.free_bytes)} szabad</span>
+        </div>
+        {/* Halmozott sáv: film / sorozat / egyéb-használt / szabad */}
+        <div style={{ display: "flex", height: 14, borderRadius: 4, overflow: "hidden", border: "1px solid var(--border-2)" }}>
+          <Seg bytes={data.movies_total_bytes} total={data.total_bytes} color="var(--primary-bg)" title={`Filmek: ${fmtBytes(data.movies_total_bytes)}`} />
+          <Seg bytes={data.series_total_bytes} total={data.total_bytes} color="var(--warn)" title={`Sorozatok: ${fmtBytes(data.series_total_bytes)}`} />
+          <Seg bytes={Math.max(0, data.used_bytes - data.movies_total_bytes - data.series_total_bytes)} total={data.total_bytes} color="var(--ink-3)" title="Egyéb használt" />
+          <Seg bytes={data.free_bytes} total={data.total_bytes} color="var(--surface-3)" title={`Szabad: ${fmtBytes(data.free_bytes)}`} />
+        </div>
+        <div style={{ display: "flex", gap: 16, marginTop: 10, flexWrap: "wrap" }}>
+          <LegendDot color="var(--primary-bg)" label={`Filmek ${fmtBytes(data.movies_total_bytes)}`} />
+          <LegendDot color="var(--warn)" label={`Sorozatok ${fmtBytes(data.series_total_bytes)}`} />
+          <LegendDot color="var(--ink-3)" label="Egyéb" />
+          <LegendDot color="var(--surface-3)" label={`Szabad ${fmtBytes(data.free_bytes)}`} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Seg({ bytes, total, color, title }: { bytes: number; total: number; color: string; title: string }) {
+  if (bytes <= 0 || total <= 0) return null;
+  return <div title={title} style={{ width: `${(bytes / total) * 100}%`, background: color, minWidth: bytes > 0 ? 2 : 0 }} />;
+}
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--ink-2)" }}>
+      <span style={{ width: 9, height: 9, borderRadius: 2, background: color, flexShrink: 0 }} /> {label}
+    </span>
+  );
+}
+
+// ── Jellyfin nézési analitika ─────────────────────────────────────────────────
+
+interface JfUser {
+  name: string;
+  last_activity: string | null;
+  last_login: string | null;
+  watched_count: number;
+  movies: number;
+  episodes: number;
+  total_minutes: number;
+  avg_minutes: number;
+  recent: { title: string; type: string; last_played: string | null; minutes: number }[];
+  continue: { title: string; percent: number }[];
+}
+
+function fmtMinutes(min: number): string {
+  if (min < 60) return `${min} p`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m > 0 ? `${h} ó ${m} p` : `${h} ó`;
+}
+function relDate(iso: string | null): string {
+  if (!iso) return "soha";
+  const d = new Date(iso);
+  const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+  if (days <= 0) return "ma";
+  if (days === 1) return "tegnap";
+  if (days < 30) return `${days} napja`;
+  return d.toLocaleDateString("hu-HU", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function WatchAnalyticsSection() {
+  const [data, setData] = useState<{ configured: boolean; users: JfUser[]; total_users?: number; total_minutes?: number } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<{ configured: boolean; users: JfUser[]; total_users?: number; total_minutes?: number }>("/api/jellyfin/analytics", { timeoutMs: 60_000 })
+      .then((d) => { if (!cancelled) setData(d); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="mb-8">
+        <p className="section-label mb-3">Jellyfin nézők</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {[0, 1, 2].map((i) => <div key={i} className="card p-4"><div className="skeleton" style={{ height: 14, width: "50%", marginBottom: 8 }} /><div className="skeleton" style={{ height: 10, width: "80%" }} /></div>)}
+        </div>
+      </div>
+    );
+  }
+  if (!data?.configured || data.users.length === 0) return null;
+
+  return (
+    <div className="mb-8">
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <p className="section-label" style={{ margin: 0 }}>Jellyfin nézők</p>
+        <span className="text-xs text-gray-400">
+          {data.total_users} felhasználó · összesen {fmtMinutes(data.total_minutes ?? 0)} lejátszás
+        </span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {data.users.map((u) => {
+          const open = expanded === u.name;
+          return (
+            <div key={u.name} className="card" style={{ padding: 14, cursor: "pointer" }} onClick={() => setExpanded(open ? null : u.name)}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 34, height: 34, borderRadius: 999, background: "var(--surface-3)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>
+                  {u.name[0]?.toUpperCase()}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p className="text-sm font-semibold text-gray-900 truncate">{u.name}</p>
+                  <p className="text-[11px] text-gray-400">Utolsó aktivitás: {relDate(u.last_activity)}</p>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 14, marginTop: 12 }}>
+                <Metric value={String(u.watched_count)} label="nézett" sub={`${u.movies}f/${u.episodes}e`} />
+                <Metric value={fmtMinutes(u.total_minutes)} label="összesen" />
+                <Metric value={fmtMinutes(u.avg_minutes)} label="átlag" />
+              </div>
+              {u.continue.length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <p className="text-[10px] text-gray-400 uppercase" style={{ letterSpacing: "0.05em", marginBottom: 4 }}>Épp nézi</p>
+                  {u.continue.slice(0, open ? 6 : 2).map((c, i) => (
+                    <div key={i} style={{ marginBottom: 5 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
+                        <span className="text-xs text-gray-700 truncate" style={{ flex: 1 }}>{c.title}</span>
+                        <span className="text-xs text-gray-400">{c.percent}%</span>
+                      </div>
+                      <div style={{ height: 3, background: "var(--surface-3)", borderRadius: 2, marginTop: 2 }}>
+                        <div style={{ height: "100%", width: `${c.percent}%`, background: "var(--ok)", borderRadius: 2 }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {open && u.recent.length > 0 && (
+                <div style={{ marginTop: 10, borderTop: "1px solid var(--border-2)", paddingTop: 8 }}>
+                  <p className="text-[10px] text-gray-400 uppercase" style={{ letterSpacing: "0.05em", marginBottom: 4 }}>Legutóbb nézett</p>
+                  {u.recent.map((r, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "2px 0" }}>
+                      <span className="text-xs text-gray-700 truncate" style={{ flex: 1 }}>{r.title}</span>
+                      <span className="text-[11px] text-gray-400 shrink-0">{relDate(r.last_played)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Metric({ value, label, sub }: { value: string; label: string; sub?: string }) {
+  return (
+    <div>
+      <p className="text-sm font-bold text-gray-900" style={{ lineHeight: 1.1 }}>{value}</p>
+      <p className="text-[10px] text-gray-400">{label}{sub && ` · ${sub}`}</p>
+    </div>
+  );
+}
+
 // ── Stat card ─────────────────────────────────────────────────────────────────
 
 function StatCard({ value, label, icon }: { value: string | number; label: string; icon: string; color?: string }) {
@@ -614,8 +808,14 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* Össztárhely */}
+        <TotalStorageSection />
+
         {/* Statisztika */}
         <StatsSection />
+
+        {/* Jellyfin nézők */}
+        <WatchAnalyticsSection />
 
         {/* Quick actions */}
         <div className="mb-2">

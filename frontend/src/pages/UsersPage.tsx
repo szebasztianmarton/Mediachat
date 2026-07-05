@@ -20,7 +20,7 @@ export default function UsersPage() {
   const currentUserId = getAuth()?.userId ?? null;
   const [users, setUsers] = useState<ApiUser[]>([]);
   const [loadError, setLoadError] = useState("");
-  const [form, setForm] = useState({ username: "", password: "", role: "user" as UserRole });
+  const [form, setForm] = useState({ username: "", password: "", role: "user" as UserRole, provisionJellyfin: false });
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
   const [addingUser, setAddingUser] = useState(false);
@@ -28,6 +28,7 @@ export default function UsersPage() {
   const [newPass, setNewPass] = useState("");
   const [showPass, setShowPass] = useState<Record<string, boolean>>({});
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [targets, setTargets] = useState<{ jellyfin: boolean; plex: boolean }>({ jellyfin: false, plex: false });
 
   const reload = useCallback(async () => {
     try {
@@ -39,7 +40,12 @@ export default function UsersPage() {
     }
   }, []);
 
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    reload();
+    api<{ jellyfin: boolean; plex: boolean }>("/api/provisioning/targets")
+      .then(setTargets)
+      .catch(() => {});
+  }, [reload]);
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
@@ -49,15 +55,21 @@ export default function UsersPage() {
     try {
       await api<ApiUser>("/api/users", {
         method: "POST",
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          username: form.username,
+          password: form.password,
+          role: form.role,
+          provision_jellyfin: form.provisionJellyfin,
+        }),
       });
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : "A létrehozás nem sikerült.");
       return;
     }
-    logger.success("users", `Új felhasználó létrehozva: ${form.username} (${form.role})`);
-    setForm({ username: "", password: "", role: "user" });
-    setFormSuccess("Felhasználó sikeresen létrehozva!");
+    const extra = form.provisionJellyfin && targets.jellyfin ? " (Jellyfinben is)" : "";
+    logger.success("users", `Új felhasználó létrehozva: ${form.username} (${form.role})${extra}`);
+    setForm({ username: "", password: "", role: "user", provisionJellyfin: false });
+    setFormSuccess(`Felhasználó sikeresen létrehozva!${extra}`);
     setTimeout(() => setFormSuccess(""), 3000);
     setAddingUser(false);
     reload();
@@ -203,6 +215,26 @@ export default function UsersPage() {
                   </div>
                 </div>
               </div>
+
+              {/* Külső rendszerekbe provisioning */}
+              {(targets.jellyfin || targets.plex) && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 12px", background: "var(--surface-2)", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}>
+                  <p className="text-xs font-medium text-gray-700">Létrehozás külső rendszerben is</p>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: targets.jellyfin ? "pointer" : "not-allowed", fontSize: 12.5, color: targets.jellyfin ? "var(--ink)" : "var(--ink-3)" }}>
+                    <input
+                      type="checkbox"
+                      disabled={!targets.jellyfin}
+                      checked={form.provisionJellyfin}
+                      onChange={(e) => setForm((f) => ({ ...f, provisionJellyfin: e.target.checked }))}
+                    />
+                    Jellyfin felhasználó létrehozása ugyanezzel a jelszóval
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "not-allowed", fontSize: 12.5, color: "var(--ink-3)" }} title="A self-hosted Plex nem támogat API-alapú felhasználó-létrehozást">
+                    <input type="checkbox" disabled checked={false} readOnly />
+                    Plex (nem elérhető — plex.tv OAuth szükséges)
+                  </label>
+                </div>
+              )}
 
               {formError && (
                 <p className="text-xs text-red-600 flex items-center gap-1.5">

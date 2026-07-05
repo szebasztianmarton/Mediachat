@@ -146,26 +146,33 @@ class LibraryService:
             date = m.get("digitalRelease") or m.get("physicalRelease") or m.get("inCinemas")
             if not date:
                 continue
+            runtime = int(m.get("runtime") or 0)
             events.append({
                 "date": date,
                 "type": "movie",
                 "title": m.get("title") or "?",
+                "code": "",
                 "subtitle": str(m.get("year") or ""),
+                "runtime": runtime,
                 "has_file": bool(m.get("hasFile")),
             })
         for ep in sonarr_items:
             date = ep.get("airDateUtc") or ep.get("airDate")
             if not date:
                 continue
-            series_title = (ep.get("series") or {}).get("title") or "?"
+            series = ep.get("series") or {}
+            series_title = series.get("title") or "?"
             season = ep.get("seasonNumber")
             number = ep.get("episodeNumber")
-            code = f"S{season:02d}E{number:02d}" if season is not None and number is not None else ""
+            code = f"{season}x{number:02d}" if season is not None and number is not None else ""
+            runtime = int(ep.get("runtime") or series.get("runtime") or 0)
             events.append({
                 "date": date,
                 "type": "episode",
                 "title": series_title,
-                "subtitle": f"{code} {ep.get('title') or ''}".strip(),
+                "code": code,
+                "subtitle": ep.get("title") or "TBA",
+                "runtime": runtime,
                 "has_file": bool(ep.get("hasFile")),
             })
         events.sort(key=lambda e: e["date"])

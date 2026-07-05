@@ -100,6 +100,8 @@ class UserCreateRequest(BaseModel):
     username: str = Field(..., min_length=2, max_length=64)
     password: str = Field(..., min_length=4, max_length=128)
     role: Literal["admin", "user"] = "user"
+    # Ha true, a felhasználó a Jellyfinben is létrejön (ha konfigurált)
+    provision_jellyfin: bool = False
 
 
 class PasswordUpdateRequest(BaseModel):

@@ -54,6 +54,13 @@ A 2026. júliusi nagy javítási kör (3 commit: `b8a4a13` → `70de1ef` → `ba
 - **CI**: GitHub Actions workflow (frontend: typecheck+test+build; backend: pytest)
 - UI: `tabular-nums`, EB Garamond a Login címen, `configured:false` őszinte widget-üzenetek
 
+### 7. kör (Jellyfin analitika, naptár-nézetek, multi-user, össztárhely) — 2026-07-05
+- **Jellyfin nézési analitika**: per-user statisztika a Jellyfin natív API-ból (ki mit nézett, mikor, össz/átlag perc, film/epizód bontás, utolsó aktivitás, „épp nézi" %-kal, legutóbb nézett lista) — Dashboard szekció, 60s cache; `GET /api/jellyfin/analytics`
+- **Multi-user provisioning**: az admin felület felhasználó-létrehozásakor opcionálisan a Jellyfinben is létrejön (`POST /Users/New`, ugyanaz a jelszó); Plex nem támogatott (plex.tv OAuth kell — jelezve); `GET /api/provisioning/targets`, `provision_jellyfin` flag
+- **Naptár 5 nézet** (Sonarr-stílus): Hónap (rács), Hét (7 oszlop), Nap (idővonal), Előrejelzés (14 nap), Lista (agenda dátum szerint csoportosítva) — idő-tartomány, epizód-kód (3x03), runtime; a backend calendar gazdagítva (`code`, `runtime`)
+- **Össztárhely**: a média-lemezek összegzése (össz/használt/szabad) + halmozott sáv (film/sorozat/egyéb/szabad) színesen a Dashboardon; `GET /api/library/storage` bővítve
+- Tesztek: 48 pytest + 11 Vitest; tsc 0 hiba, build OK. Élő: 7 Jellyfin user 8091 perc, Szeba 44 nézett (78p átlag), 3.2 TB össztárhely
+
 ### 6. kör (analitika, naptár, Settings-hub, backup) — 2026-07-05
 - **Jellyfin-fix**: a Settings `isConfigured` mostantól a SZERVER állapotát nézi (nem a titkos mezőt, ami újratöltéskor kiürül) — a Jellyfin (és minden titok-alapú szolgáltatás) helyesen konfiguráltnak látszik; a szerveren beállított szolgáltatások automatikusan bekapcsolnak és betöltéskor pingelődnek (zöld/piros)
 - **Dashboard analitika**: film/sorozat külön statisztikák (darab, tárhely, évad/epizód, átlag), CSP-biztos inline SVG chartok — donut (film vs sorozat tárhely-arány), area (14 napos hozzáadás-idősor), vízszintes bar (top műfajok); `GET /api/library/stats`
