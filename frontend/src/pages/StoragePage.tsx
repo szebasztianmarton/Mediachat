@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import AppShell from "../components/AppShell";
 import { api, ApiError } from "../utils/api";
+import { useToast } from "../components/Toast";
 import { logger } from "../utils/logger";
 
 interface Volume {
@@ -59,6 +60,7 @@ function UsageBar({ used, total }: { used: number; total: number }) {
 }
 
 export default function StoragePage() {
+  const toast = useToast();
   const [status, setStatus] = useState<StorageStatus | null>(null);
   const [stale, setStale] = useState<StaleItem[]>([]);
   const [staleDays, setStaleDays] = useState<number>(30);
@@ -120,11 +122,15 @@ export default function StoragePage() {
     try {
       const result = await api<CleanupResult>("/api/storage/cleanup", { method: "POST", body: JSON.stringify({}), timeoutMs: 120_000 });
       const files = result.cache_files;
-      setCleanupMsg(`${files.deleted_files} fájl törölve (${files.freed_mb} MB), ${result.search_cache_keys_deleted} keresési cache kulcs ürítve.`);
+      const msg = `${files.deleted_files} fájl törölve (${files.freed_mb} MB), ${result.search_cache_keys_deleted} keresési cache kulcs ürítve.`;
+      setCleanupMsg(msg);
+      toast.success(msg);
       logger.success("system", "Cache takarítás lefutott");
       loadStatus();
     } catch (err) {
-      setCleanupMsg(err instanceof ApiError ? `Hiba: ${err.message}` : "A takarítás nem sikerült.");
+      const msg = err instanceof ApiError ? `Hiba: ${err.message}` : "A takarítás nem sikerült.";
+      setCleanupMsg(msg);
+      toast.error(msg);
       logger.error("system", "Cache takarítás sikertelen");
     } finally {
       setCleaning(false);
@@ -145,10 +151,13 @@ export default function StoragePage() {
         body: JSON.stringify({ media_type: item.media_type, arr_id: item.arr_id, action }),
       });
       setActionMsg(`${item.title}: ${result.message}`);
+      toast.success(`${item.title}: ${result.message}`);
       logger.warn("media", `Stale akció (${action}): ${item.title}`);
       loadStale();
     } catch (err) {
-      setActionMsg(err instanceof ApiError ? `Hiba: ${err.message}` : "A művelet nem sikerült.");
+      const msg = err instanceof ApiError ? `Hiba: ${err.message}` : "A művelet nem sikerült.";
+      setActionMsg(msg);
+      toast.error(msg);
     } finally {
       setActionBusy(null);
       setConfirmDelete(null);

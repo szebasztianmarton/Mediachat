@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
 import Sidebar from "./Sidebar";
 
@@ -6,10 +7,54 @@ interface Props {
 }
 
 export default function AppShell({ children }: Props) {
+  const [mobileOpen, setMobileOpen] = useState(false);
+
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
-      <Sidebar />
+      <Sidebar open={mobileOpen} onNavigate={() => setMobileOpen(false)} />
+
+      {/* Mobil overlay a nyitott sidebar mögött */}
+      {mobileOpen && (
+        <button
+          className="app-overlay mobile-only"
+          aria-label="Menü bezárása"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
+      {/* Mobil hamburger gomb (fix, bal felül) */}
+      <button
+        className="mobile-only"
+        aria-label={mobileOpen ? "Menü bezárása" : "Menü megnyitása"}
+        aria-expanded={mobileOpen}
+        onClick={() => setMobileOpen((v) => !v)}
+        style={{
+          position: "fixed",
+          top: 12,
+          left: 12,
+          zIndex: 55,
+          width: 40,
+          height: 40,
+          alignItems: "center",
+          justifyContent: "center",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-sm)",
+          cursor: "pointer",
+          color: "var(--ink)",
+        }}
+      >
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+          {mobileOpen ? (
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          ) : (
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+          )}
+        </svg>
+      </button>
+
       <div
+        className="app-content"
         style={{
           marginLeft: 240,
           flex: 1,

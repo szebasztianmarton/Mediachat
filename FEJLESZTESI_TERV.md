@@ -1,6 +1,6 @@
 # Mediachat — Fejlesztési terv és állapotjelentés
 
-*Utolsó frissítés: 2026-07-04 (2. kör — P0 + P1 nagy része kész)*
+*Utolsó frissítés: 2026-07-05 (5. kör — P2 + biztonság + mobil/PWA)*
 
 ---
 
@@ -53,6 +53,15 @@ A 2026. júliusi nagy javítási kör (3 commit: `b8a4a13` → `70de1ef` → `ba
 - **Tesztek**: 16 pytest (auth flow, RBAC, rate limit, unit) + 11 Vitest (api kliens, auth util) — mind zöld
 - **CI**: GitHub Actions workflow (frontend: typecheck+test+build; backend: pytest)
 - UI: `tabular-nums`, EB Garamond a Login címen, `configured:false` őszinte widget-üzenetek
+
+### 5. kör (P2 + biztonság + mobil/PWA) — 2026-07-05
+- **Letöltés-kész értesítés**: Sonarr/Radarr webhook (`POST /api/webhooks/{titok}/{sonarr|radarr}`) → Telegram/Discord bot + DB-napló; titok-alapú védelem; teszt gomb és cél-chat/csatorna mezők a Settingsben; `GET /api/notifications`
+- **Session token hash-elve**: a DB-ben csak SHA-256 hash tárolódik (a kliens a nyers tokent kapja) — DB-lopásnál a tokenek nem használhatók azonnal; `revoke_session` id alapján
+- **Jobs oldal** (`/jobs`, admin): a hozzáadási queue admin nézete (állapotok, időbélyegek, hibás jobok újrapróbálása); `GET /api/jobs`, `POST /api/jobs/{id}/retry`
+- **Toast-rendszer**: egységes jobb-felső értesítések (`useToast`), bekötve a Settings mentésbe/teszt-értesítésbe és a Storage akciókba
+- **Mobil nézet**: off-canvas sidebar hamburger gombbal + overlay (<768px), reszponzív topbar; a nav-linkek zárják a menüt
+- **PWA**: helyes manifest (monokróm ikon, e-ink színek), API-mentes service worker (network-first navigáció, cache-first asset), telepíthető ikon; a régi API-t is cache-elő SW lecserélve
+- Tesztek: 37 pytest (token-hash, jobs RBAC, webhook titok/formátum) + 11 Vitest; tsc 0 hiba, build OK
 
 ### 4. kör (torrent auto-delete, témák, statisztika) — 2026-07-05
 - **Torrent auto-törlés**: befejezett letöltés N óra után automatikusan törlődik (10 percenkénti háttérciklus), minden törlés a `torrent_cleanup_log` táblába kerül; kézi törlés a Dashboard widgetből; visszaszámláló a torrent sorokon; napló a Tárhely oldalon; óra-beállítás a Settings Torrent kártyáján
@@ -113,19 +122,22 @@ Amit a átvizsgálás feltárt, de **tudatosan még nincs javítva**:
 
 ### P2 — Bővítések
 
-11. **Értesítések** — Telegram/web push, amikor egy hozzáadott film/sorozat ténylegesen letöltődött (Sonarr/Radarr webhook → backend → értesítés)
-12. **Jobs oldal** — a queue állapotának admin nézete (futó/kész/hibás jobok, újrapróbálás)
+11. ~~**Értesítések**~~ ✅ KÉSZ — Sonarr/Radarr webhook → Telegram/Discord bot + napló, teszt gomb a Settingsben
+12. ~~**Jobs oldal**~~ ✅ KÉSZ — admin queue-nézet állapotokkal, hibás jobok újrapróbálásával (`/jobs`)
 13. **Trakt integráció** — a config mezők már léteznek; watch-history szinkron az ajánló pontosításához
-14. **PWA** — manifest + service worker (a README ígéri, de nincs); offline shell + telepíthetőség mobilra
-15. **i18n** — a beégetett magyar szövegek kiszervezése (hu/en), pl. `react-i18next`
+14. ~~**PWA**~~ ✅ KÉSZ — manifest + API-mentes service worker + telepíthető ikon
+15. **i18n** — a beégetett magyar szövegek kiszervezése (hu/en), pl. `react-i18next` — *homelab projektnél alacsony prioritás*
 16. **Prowlarr health** — indexer-állapot a Dashboardon
+17. ~~**Mobil nézet**~~ ✅ KÉSZ — off-canvas sidebar hamburgerrel, reszponzív töréspontok (<768px)
+18. ~~**Session token hash**~~ ✅ KÉSZ — SHA-256 a DB-ben, a kliens a nyers tokent kapja
+19. ~~**Toast-rendszer**~~ ✅ KÉSZ — egységes jobb-felső értesítések (`useToast`)
 
 ### P3 — Hosszabb táv
 
-17. **Okosabb ajánló** — embedding-alapú hasonlóság (a TMDB műfaj-egyezés helyett), Plex watch-history mint jel
-18. **Modellválasztó a UI-ból** — Ollama `/api/tags` lista, modellváltás chat közben
-19. **Felhasználói kvóták** — user-enkénti napi/heti hozzáadási limit
-20. **Audit log** — ki mit adott hozzá/törölt, admin nézettel
+20. **Okosabb ajánló** — embedding-alapú hasonlóság (a TMDB műfaj-egyezés helyett), Plex watch-history mint jel
+21. **Modellválasztó a UI-ból** — Ollama `/api/tags` lista, modellváltás chat közben
+22. **Felhasználói kvóták** — user-enkénti napi/heti hozzáadási limit
+23. **Audit log** — ki mit adott hozzá/törölt, admin nézettel
 
 ---
 

@@ -33,6 +33,9 @@ EDITABLE_KEYS: frozenset[str] = frozenset(
         "jellyfin_url",
         "jellyfin_api_key",
         "max_series_quality",
+        "webhook_secret",
+        "telegram_notify_chat_id",
+        "discord_notify_channel_id",
     }
 )
 

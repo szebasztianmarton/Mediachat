@@ -83,6 +83,10 @@ export interface AppSettings {
   jellyfinEnabled: boolean;
   jellyfinUrl: string;
   jellyfinApiKey: string;
+  // Értesítések (letöltés-kész webhook)
+  webhookSecret: string;
+  telegramNotifyChatId: string;
+  discordNotifyChannelId: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -122,6 +126,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   jellyfinEnabled: false,
   jellyfinUrl: "",
   jellyfinApiKey: "",
+  webhookSecret: "",
+  telegramNotifyChatId: "",
+  discordNotifyChannelId: "",
 };
 
 export const SETTINGS_KEY = "mediachat-settings";

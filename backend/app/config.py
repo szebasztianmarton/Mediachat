@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     # Vesszővel elválasztott guild (szerver) ID-k; üresen hagyva minden szerver engedélyezett.
     discord_allowed_guild_ids: str = ""
 
+    # Letöltés-kész értesítés (Sonarr/Radarr webhook → bot)
+    # A webhook URL: {APP_URL}/api/webhooks/{WEBHOOK_SECRET}/sonarr (ill. /radarr)
+    webhook_secret: str = ""
+    # Ahová a bot az értesítést küldi (üresen a Telegram allowlist első ID-jét használja)
+    telegram_notify_chat_id: str = ""
+    discord_notify_channel_id: str = ""
+
     # Torrent kliens (qbittorrent | transmission)
     torrent_client: str = "qbittorrent"
     torrent_url: str = ""

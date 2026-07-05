@@ -32,8 +32,11 @@ from app.models import (
     FeedbackRequest,
     HealthResponse,
     JobResponse,
+    JobsResponse,
     LoginRequest,
     LoginResponse,
+    NotificationItem,
+    NotificationsResponse,
     PasswordUpdateRequest,
     RecommendationResponse,
     SearchRequest,
@@ -54,6 +57,7 @@ from app.services import config_store
 from app.services.cache import CacheService
 from app.services.history import HistoryService
 from app.services.media_sessions import MediaSessionsService
+from app.services.notifications import NotificationService
 from app.services.ollama import OllamaClient, OllamaError, OllamaTimeout, OllamaUnavailable
 from app.services.queue import QueueService
 from app.services.radarr import RadarrClient
@@ -124,6 +128,7 @@ async def lifespan(app: FastAPI):
         torrents=TorrentService(),
         media=MediaSessionsService(),
         history=HistoryService(),
+        notifications=NotificationService(),
     )
 
     async with SessionLocal() as db:
@@ -235,8 +240,8 @@ async def login(
     auth = await st.session.authenticate(db, payload.username, payload.password)
     if auth is None:
         raise HTTPException(status_code=401, detail="Hibás felhasználónév vagy jelszó.")
-    user, session = auth
-    return LoginResponse(token=session.token, user=_user_info(user))
+    user, _session, plaintext_token = auth
+    return LoginResponse(token=plaintext_token, user=_user_info(user))
 
 
 @app.post("/api/auth/logout")
@@ -244,7 +249,7 @@ async def logout(
     session: UserSession = Depends(get_required_session),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, bool]:
-    await _state().session.revoke(db, session.token)
+    await _state().session.revoke_session(db, session.id)
     return {"success": True}
 
 
@@ -387,6 +392,39 @@ async def add_media(
     )
 
 
+def _job_response(job) -> JobResponse:
+    return JobResponse(
+        id=job.id,
+        status=job.status,
+        message=job.message,
+        title=job.title,
+        media_type=job.media_type,  # type: ignore[arg-type]
+        created_at=job.created_at.isoformat() if job.created_at else None,
+        finished_at=job.finished_at.isoformat() if job.finished_at else None,
+    )
+
+
+@app.get("/api/jobs", response_model=JobsResponse)
+async def list_jobs(
+    db: AsyncSession = Depends(get_db),
+    _: UserSession = Depends(get_admin_session),
+) -> JobsResponse:
+    jobs = await _state().queue.list_jobs(db)
+    return JobsResponse(jobs=[_job_response(j) for j in jobs])
+
+
+@app.post("/api/jobs/{job_id}/retry", response_model=JobResponse)
+async def retry_job(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: UserSession = Depends(get_admin_session),
+) -> JobResponse:
+    job = await _state().queue.retry_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="A feladat nem található.")
+    return _job_response(job)
+
+
 @app.get("/api/jobs/{job_id}", response_model=JobResponse)
 async def get_job(
     job_id: str,
@@ -396,13 +434,7 @@ async def get_job(
     job = await _state().queue.get_job(db, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="A feladat nem található.")
-    return JobResponse(
-        id=job.id,
-        status=job.status,
-        message=job.message,
-        title=job.title,
-        media_type=job.media_type,  # type: ignore[arg-type]
-    )
+    return _job_response(job)
 
 
 # ── Recommendations / Feedback ───────────────────────────────────────────────
@@ -693,6 +725,103 @@ async def torrent_cleanup_log(
         ],
         "auto_delete_hours": settings.torrent_auto_delete_hours,
     }
+
+
+# ── Értesítések + webhookok ──────────────────────────────────────────────────
+
+
+def _format_sonarr_webhook(payload: dict) -> tuple[str, str] | None:
+    """Sonarr 'Download' (import) esemény → (cím, törzs). None, ha nem érdekes."""
+    event = payload.get("eventType")
+    if event not in ("Download", "DownloadFolderImported"):
+        return None
+    series = (payload.get("series") or {}).get("title") or "Ismeretlen sorozat"
+    episodes = payload.get("episodes") or []
+    if episodes:
+        ep = episodes[0]
+        season = ep.get("seasonNumber")
+        number = ep.get("episodeNumber")
+        ep_title = ep.get("title") or ""
+        code = f"S{season:02d}E{number:02d}" if season is not None and number is not None else ""
+        body = f"{code} {ep_title}".strip()
+        return f"Letöltve: {series}", body
+    return f"Letöltve: {series}", ""
+
+
+def _format_radarr_webhook(payload: dict) -> tuple[str, str] | None:
+    event = payload.get("eventType")
+    if event not in ("Download", "MovieFileImported"):
+        return None
+    movie = payload.get("movie") or {}
+    title = movie.get("title") or "Ismeretlen film"
+    year = movie.get("year")
+    body = f"({year})" if year else ""
+    return f"Letöltve: {title}", body
+
+
+@app.post("/api/webhooks/{secret}/{service}")
+async def receive_webhook(secret: str, service: str, request: Request) -> dict:
+    """Sonarr/Radarr webhook fogadó. Az URL-be épített titok véd a visszaéléstől.
+    Ha a WEBHOOK_SECRET nincs beállítva, a végpont letiltva (404)."""
+    if not settings.webhook_secret:
+        raise HTTPException(status_code=404, detail="A webhook funkció nincs bekapcsolva.")
+    if secret != settings.webhook_secret:
+        raise HTTPException(status_code=403, detail="Érvénytelen webhook titok.")
+    st = _state()
+
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        payload = {}
+
+    # Sonarr/Radarr teszt-esemény: nyugtázzuk
+    if payload.get("eventType") == "Test":
+        return {"ok": True, "test": True}
+
+    if service == "sonarr":
+        parsed = _format_sonarr_webhook(payload)
+    elif service == "radarr":
+        parsed = _format_radarr_webhook(payload)
+    else:
+        raise HTTPException(status_code=404, detail="Ismeretlen webhook szolgáltatás.")
+
+    if parsed is None:
+        return {"ok": True, "ignored": True}
+
+    title, body = parsed
+    delivered = await st.notifications.dispatch(title, body, kind="download")
+    return {"ok": True, "delivered": delivered}
+
+
+@app.get("/api/notifications", response_model=NotificationsResponse)
+async def list_notifications(
+    _: UserSession = Depends(get_required_session),
+    db: AsyncSession = Depends(get_db),
+) -> NotificationsResponse:
+    items = await NotificationService.recent(db)
+    return NotificationsResponse(
+        notifications=[
+            NotificationItem(
+                id=n.id,
+                kind=n.kind,
+                title=n.title,
+                body=n.body,
+                delivered=n.delivered,
+                created_at=n.created_at.isoformat() if n.created_at else None,
+            )
+            for n in items
+        ]
+    )
+
+
+@app.post("/api/notifications/test")
+async def test_notification(_: UserSession = Depends(get_admin_session)) -> dict:
+    delivered = await _state().notifications.dispatch(
+        "Teszt értesítés",
+        "Ha ezt látod a Telegramon/Discordon, az értesítések működnek.",
+        kind="system",
+    )
+    return {"delivered": delivered}
 
 
 # ── Statisztika (admin) ──────────────────────────────────────────────────────

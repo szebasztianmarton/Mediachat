@@ -3,6 +3,7 @@ import AppShell from "../components/AppShell";
 import type { AppSettings } from "../types";
 import { DEFAULT_SETTINGS, SETTINGS_KEY } from "../types";
 import { api, ApiError } from "../utils/api";
+import { useToast } from "../components/Toast";
 import { logger } from "../utils/logger";
 
 // Frontend mező ↔ backend config kulcs megfeleltetés. Ezek mentéskor a
@@ -24,6 +25,9 @@ const CONFIG_FIELD_MAP: Array<{ field: keyof AppSettings; key: string; secret: b
   { field: "plexToken", key: "plex_token", secret: true },
   { field: "jellyfinUrl", key: "jellyfin_url", secret: false },
   { field: "jellyfinApiKey", key: "jellyfin_api_key", secret: true },
+  { field: "webhookSecret", key: "webhook_secret", secret: false },
+  { field: "telegramNotifyChatId", key: "telegram_notify_chat_id", secret: false },
+  { field: "discordNotifyChannelId", key: "discord_notify_channel_id", secret: false },
 ];
 
 interface ConfigView {
@@ -393,9 +397,11 @@ const BACKEND_TESTABLE = new Set<ServiceKey>([
 ]);
 
 export default function SettingsPage() {
+  const toast = useToast();
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [testingNotify, setTestingNotify] = useState(false);
   const [serverSecrets, setServerSecrets] = useState<Record<string, string | null>>({});
   const [results, setResults] = useState<Record<string, ServiceTestResult>>(() =>
     Object.fromEntries(ALL_SERVICE_KEYS.map((k) => [k, { state: "untested" as ConnectionState }]))
@@ -464,12 +470,34 @@ export default function SettingsPage() {
         return next as unknown as AppSettings;
       });
       setSaved(true);
+      toast.success("Beállítások mentve és azonnal érvénybe léptek.");
       logger.success("settings", "Beállítások mentve a szerverre");
     } catch (err) {
-      setSaveError(err instanceof ApiError ? err.message : "A szerver nem érhető el — csak a böngészőben mentve.");
+      const msg = err instanceof ApiError ? err.message : "A szerver nem érhető el — csak a böngészőben mentve.";
+      setSaveError(msg);
+      toast.error(msg);
       logger.error("settings", "Szerveroldali mentés sikertelen");
     }
     setTimeout(() => setSaved(false), 2500);
+  }
+
+  async function testNotification() {
+    setTestingNotify(true);
+    try {
+      const res = await api<{ delivered: string[] }>("/api/notifications/test", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (res.delivered.length > 0) {
+        toast.success(`Teszt értesítés elküldve: ${res.delivered.join(", ")}`);
+      } else {
+        toast.info("Az értesítés naplózva, de egyik bot sincs bekapcsolva vagy cél-chat beállítva.");
+      }
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "A teszt értesítés nem sikerült.");
+    } finally {
+      setTestingNotify(false);
+    }
   }
 
   function reset() {
@@ -750,6 +778,51 @@ export default function SettingsPage() {
               startExpanded={!isConfigured("discord", settings)}>
               <Field label="Bot Token" id="discord-token" value={settings.discordBotToken} onChange={(v) => update("discordBotToken", v)} placeholder="MTAx..." secret helpText="discord.com/developers → Alkalmazások → Bot → Token" />
             </ServiceCard>
+          </div>
+        </section>
+
+        {/* ── GROUP 5: Letöltés-kész értesítések ── */}
+        <section style={{ marginBottom: 32 }}>
+          <GroupHeader
+            title="Letöltés-kész értesítések"
+            iconPath="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"
+          />
+          <div className="card" style={{ padding: "16px 20px" }}>
+            <p className="text-xs text-gray-600" style={{ marginBottom: 14, lineHeight: 1.6 }}>
+              Amikor egy hozzáadott film/sorozat ténylegesen letöltődik, a Sonarr/Radarr értesíti a szervert,
+              ami a Telegram/Discord boton keresztül szól. Állítsd be a titkot itt, majd a Sonarr/Radarrban:
+              <br />
+              <strong>Settings → Connect → Webhook</strong>, URL: <code style={{ fontFamily: "monospace" }}>{`{APP_URL}/api/webhooks/{TITOK}/sonarr`}</code> (ill. <code style={{ fontFamily: "monospace" }}>/radarr</code>), trigger: <em>On Import</em>.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <Field
+                label="Webhook titok"
+                id="webhook-secret"
+                value={settings.webhookSecret}
+                onChange={(v) => update("webhookSecret", v.replace(/[^a-zA-Z0-9_-]/g, ""))}
+                placeholder="pl. egy hosszú véletlen szó"
+                helpText="Üres = a webhook végpont letiltva. Ennek szerepelnie kell a Sonarr/Radarr webhook URL-jében."
+              />
+              <Field
+                label="Telegram értesítési chat ID"
+                id="tg-notify"
+                value={settings.telegramNotifyChatId}
+                onChange={(v) => update("telegramNotifyChatId", v)}
+                placeholder="pl. 123456789 (üresen az allowlist elsőjét használja)"
+              />
+              <Field
+                label="Discord értesítési csatorna ID"
+                id="dc-notify"
+                value={settings.discordNotifyChannelId}
+                onChange={(v) => update("discordNotifyChannelId", v)}
+                placeholder="pl. 987654321098765432"
+              />
+              <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 4 }}>
+                <button onClick={testNotification} disabled={testingNotify} className="btn btn-secondary btn-sm">
+                  {testingNotify ? "Küldés..." : "Teszt értesítés küldése"}
+                </button>
+              </div>
+            </div>
           </div>
         </section>
 

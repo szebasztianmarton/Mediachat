@@ -81,6 +81,25 @@ class QueueService:
         result = await db.execute(select(AddJob).where(AddJob.id == job_id))
         return result.scalar_one_or_none()
 
+    async def list_jobs(self, db: AsyncSession, limit: int = 100) -> list[AddJob]:
+        result = await db.execute(
+            select(AddJob).order_by(AddJob.created_at.desc()).limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def retry_job(self, db: AsyncSession, job_id: str) -> AddJob | None:
+        """Egy hibás (failed) jobot visszatesz a sorba."""
+        job = await self.get_job(db, job_id)
+        if job is None:
+            return None
+        job.status = "queued"
+        job.message = ""
+        job.finished_at = None
+        await db.commit()
+        await db.refresh(job)
+        await self._queue.put(job.id)
+        return job
+
     async def _worker(self) -> None:
         from app.db.database import SessionLocal
 

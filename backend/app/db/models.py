@@ -85,6 +85,17 @@ class TorrentCleanupLog(Base):
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(32), default="download")  # download | system
+    title: Mapped[str] = mapped_column(String(255))
+    body: Mapped[str] = mapped_column(Text, default="")
+    delivered: Mapped[str] = mapped_column(String(64), default="")  # pl. "telegram,discord"
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ConfigOverride(Base):
     __tablename__ = "config_overrides"
 

@@ -7,6 +7,26 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# A futó Discord kliens referenciája — az értesítés-küldés ezen keresztül megy.
+_client = None
+
+
+async def send_discord_notification(text: str) -> bool:
+    if _client is None or not settings.discord_notify_channel_id.strip():
+        return False
+    try:
+        channel_id = int(settings.discord_notify_channel_id.strip())
+    except ValueError:
+        logger.warning("Discord értesítés: érvénytelen DISCORD_NOTIFY_CHANNEL_ID.")
+        return False
+    try:
+        channel = _client.get_channel(channel_id) or await _client.fetch_channel(channel_id)
+        await channel.send(text)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Discord értesítés kézbesítése sikertelen: %s", exc)
+        return False
+
 
 def _allowed_guild_ids() -> set[int]:
     raw = settings.discord_allowed_guild_ids.strip()
@@ -70,7 +90,12 @@ class MediaBot(discord.Client):
 
 
 async def run_discord_bot() -> None:
+    global _client
     intents = discord.Intents.default()
     intents.message_content = True
     client = MediaBot(intents=intents)
-    await client.start(settings.discord_bot_token)
+    _client = client
+    try:
+        await client.start(settings.discord_bot_token)
+    finally:
+        _client = None

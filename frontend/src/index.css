@@ -493,9 +493,35 @@
     border: 1px solid var(--border);
   }
 
+  /* ── Reszponzív shell: mobilon off-canvas sidebar ── */
+  .app-sidebar { transform: translateX(0); }
+  .mobile-only { display: none; }
+
+  @media (max-width: 767px) {
+    .app-content { margin-left: 0 !important; }
+    .app-sidebar {
+      transform: translateX(-100%);
+      transition: transform 0.22s ease-out;
+      box-shadow: var(--shadow-pop);
+    }
+    .app-sidebar--open { transform: translateX(0); }
+    .mobile-only { display: flex; }
+    .page-topbar { padding-left: 64px; }
+  }
+
+  .app-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 45;
+    border: none;
+    cursor: pointer;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .skeleton { animation: none; }
     .dot-amber { animation: none; }
     * { transition: none !important; }
+    .app-sidebar { transition: none !important; }
   }
 }

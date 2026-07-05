@@ -9,6 +9,41 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# A futó Telegram Application referenciája — az értesítés-küldés ezen keresztül megy.
+_application = None
+
+
+def _notify_chat_ids() -> list[int]:
+    if settings.telegram_notify_chat_id.strip():
+        raw = settings.telegram_notify_chat_id
+    else:
+        raw = settings.telegram_allowed_chat_ids
+    ids: list[int] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if part.lstrip("-").isdigit():
+            ids.append(int(part))
+    return ids
+
+
+async def send_telegram_notification(text: str) -> bool:
+    """Értesítés küldése a beállított Telegram chat(ek)be. True, ha legalább
+    egy kézbesítés sikerült."""
+    if _application is None:
+        return False
+    chat_ids = _notify_chat_ids()
+    if not chat_ids:
+        logger.warning("Telegram értesítés: nincs cél chat ID (TELEGRAM_NOTIFY_CHAT_ID / allowlist).")
+        return False
+    sent = False
+    for chat_id in chat_ids:
+        try:
+            await _application.bot.send_message(chat_id=chat_id, text=text)
+            sent = True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Telegram értesítés kézbesítése sikertelen (%s): %s", chat_id, exc)
+    return sent
+
 # Telegram callback_data limit: 64 bájt (nem karakter — az ékezetes betűk
 # UTF-8-ban többájtosak).
 _CALLBACK_MAX_BYTES = 64
@@ -117,6 +152,7 @@ async def handle_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def run_telegram_bot() -> None:
+    global _application
     application = (
         Application.builder()
         .token(settings.telegram_bot_token)
@@ -131,6 +167,7 @@ async def run_telegram_bot() -> None:
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
+    _application = application
     if not _allowed_chat_ids():
         logger.warning(
             "Telegram bot allowlist nélkül fut — bárki használhatja. "
@@ -140,6 +177,7 @@ async def run_telegram_bot() -> None:
     try:
         await asyncio.Event().wait()  # fut, amíg a lifespan le nem állítja a taskot
     finally:
+        _application = None
         await application.updater.stop()
         await application.stop()
         await application.shutdown()

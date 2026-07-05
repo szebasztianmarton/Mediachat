@@ -36,6 +36,12 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
+def hash_token(token: str) -> str:
+    """A session tokent nem plaintextben tároljuk — DB-lopásnál a tokenek ne
+    legyenek azonnal használhatók. A kliens a nyers tokent kapja, a DB a hash-t."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def _as_aware(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -51,7 +57,9 @@ class SessionService:
         username: str,
         password: str,
         platform: str = "web",
-    ) -> tuple[User, UserSession] | None:
+    ) -> tuple[User, UserSession, str] | None:
+        """Siker esetén (user, session, plaintext_token) — a plaintext tokent CSAK
+        itt adjuk ki egyszer, a DB-ben a hash-e tárolódik."""
         result = await db.execute(select(User).where(User.username == username.strip().lower()))
         user = result.scalar_one_or_none()
         if user is None or not user.password_hash:
@@ -60,16 +68,17 @@ class SessionService:
             return None
         if not verify_password(password, user.password_hash):
             return None
-        session = UserSession(user_id=user.id, token=secrets.token_urlsafe(32), platform=platform)
+        plaintext = secrets.token_urlsafe(32)
+        session = UserSession(user_id=user.id, token=hash_token(plaintext), platform=platform)
         db.add(session)
         await db.commit()
         await db.refresh(session)
-        return user, session
+        return user, session, plaintext
 
     async def get_session(self, db: AsyncSession, token: str) -> UserSession | None:
         result = await db.execute(
             select(UserSession)
-            .where(UserSession.token == token)
+            .where(UserSession.token == hash_token(token))
             .options(selectinload(UserSession.user))
         )
         session = result.scalar_one_or_none()
@@ -89,8 +98,8 @@ class SessionService:
             await db.commit()
         return session
 
-    async def revoke(self, db: AsyncSession, token: str) -> None:
-        await db.execute(delete(UserSession).where(UserSession.token == token))
+    async def revoke_session(self, db: AsyncSession, session_id: str) -> None:
+        await db.execute(delete(UserSession).where(UserSession.id == session_id))
         await db.commit()
 
     async def create_user(

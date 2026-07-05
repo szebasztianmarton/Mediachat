@@ -116,6 +116,25 @@ class JobResponse(BaseModel):
     message: str
     title: str
     media_type: Literal["movie", "series"]
+    created_at: str | None = None
+    finished_at: str | None = None
+
+
+class JobsResponse(BaseModel):
+    jobs: list[JobResponse]
+
+
+class NotificationItem(BaseModel):
+    id: int
+    kind: str
+    title: str
+    body: str = ""
+    delivered: str = ""
+    created_at: str | None = None
+
+
+class NotificationsResponse(BaseModel):
+    notifications: list[NotificationItem]
 
 
 class RecommendationItem(BaseModel):

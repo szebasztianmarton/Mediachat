@@ -3,16 +3,18 @@
   "short_name": "MediaBot",
   "description": "Film és sorozat chatbot Sonarr/Radarr integrációval",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#0b1020",
-  "theme_color": "#0b1020",
+  "orientation": "portrait-primary",
+  "background_color": "#F9F9F9",
+  "theme_color": "#000000",
   "lang": "hu",
   "icons": [
     {
       "src": "/icons/icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any"
+      "purpose": "any maskable"
     }
   ]
 }
