@@ -58,7 +58,7 @@ git clone https://github.com/szebasztianmarton/Mediachat.git .
 >    a generált tokent.
 > 3. Vagy egyszerűbben, írd bele a tokent az URL-be (ne oszd meg máshol, mert a
 >    shell historyban is megmarad):
->    `git clone https://<TOKEN>@github.com/szebasztianmarton/Mediachat.git mediachat`
+>    `git clone https://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@github.com/szebasztianmarton/Mediachat.git mediachat`
 >
 > `git pull`-nál (frissítéskor) a token ugyanígy szükséges, hacsak nem
 > `git config credential.helper store`-ral elmentetted egyszer.
