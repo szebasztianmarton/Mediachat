@@ -226,6 +226,85 @@ class OllamaClient:
             "media_type_hint": parsed.get("media_type_hint"),
         }
 
+    async def resolve_title(self, message: str) -> dict[str, Any]:
+        """Egyetlen célzott extrakció közvetlen cím/hozzáadás kérésekhez: a pontos
+        cím (ahogy a user írta, parancs- és minőség-szavak nélkül) ÉS egy angol/
+        eredeti nyelvű fordítás-jelölt. A Sonarr/Radarr/TMDB elsősorban angol vagy
+        eredeti nyelvű címeket indexel — egy tisztán magyar cím önmagában
+        (fordítás nélkül) gyakran nem ad találatot, még ha helyesen van is
+        felismerve."""
+        if not self.configured:
+            return self._fallback_title(message)
+
+        prompt = (
+            "Extract the movie or TV series title from this user message, which may be "
+            "in Hungarian or another language and may include extra command words "
+            "(add/download/search) or quality specs (1080p, 4K, felbontás). "
+            "Return ONLY valid JSON with keys: "
+            "title (the exact title as written, original spelling/diacritics, WITHOUT the "
+            "command or quality words), "
+            "title_en (your best-guess English or original-language title of this specific "
+            "work if you recognize it or can translate it; if unsure, repeat the same value "
+            "as title), "
+            "year (number or null), media_type_hint (movie|series|null). "
+            f"User message: {message}"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/api/generate",
+                    json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
+                )
+                if response.status_code >= 400:
+                    return self._fallback_title(message)
+                body = response.json()
+                parsed = json.loads(body.get("response") or "{}")
+        except (httpx.HTTPError, json.JSONDecodeError, TypeError, ValueError):
+            return self._fallback_title(message)
+
+        title = str(parsed.get("title") or "").strip() or message.strip()
+        title_en = str(parsed.get("title_en") or "").strip() or title
+        return {
+            "title": title,
+            "title_en": title_en,
+            "year": parsed.get("year"),
+            "media_type_hint": parsed.get("media_type_hint"),
+        }
+
+    def _fallback_title(self, message: str) -> dict[str, Any]:
+        """Offline (Ollama nélküli) tisztítás: parancs- és minőség-szavak levágása
+        reguláris kifejezéssel. Fordítást nem tud adni — csak a tisztított cím
+        marad mindkét mezőben."""
+        text = message
+        strip_patterns = (
+            r"\b(add|adj|tedd|rakd|vedd)\s+hozz[áa]\b", r"\bhozz[áa]add?\b",
+            r"\blet[öo]lt(sd|s)?\b", r"\bt[öo]lts[dh]?\s+le\b",
+            r"\bkeress?d?\s+meg\b", r"\bmutasd\s+(meg|a)\b",
+            r"\bdownload\b", r"\bsearch\b", r"\bfind\b",
+            r"\b\d{3,4}p\b", r"\b4k\b", r"felbont[áa]s(ba|ban|[úu])?",
+        )
+        for pat in strip_patterns:
+            text = re.sub(pat, " ", text, flags=re.IGNORECASE)
+        title = re.sub(r"\s+", " ", text).strip(" .,!?\"'")
+        # A vezető magyar névelőt ("a"/"az X...") levágjuk — középen maradhat
+        # (pl. "Frank és a Halálcsillag"), csak az elején zavaró.
+        title = re.sub(r"^(a|az)\s+", "", title, flags=re.IGNORECASE).strip()
+        if not title:
+            title = message.strip()
+        year_match = re.search(r"\b(19|20)\d{2}\b", message)
+        media_hint = None
+        lower = message.lower()
+        if any(t in lower for t in ("sorozat", "series", "season", "évad")):
+            media_hint = "series"
+        elif any(t in lower for t in ("film", "movie")):
+            media_hint = "movie"
+        return {
+            "title": title,
+            "title_en": title,
+            "year": int(year_match.group()) if year_match else None,
+            "media_type_hint": media_hint,
+        }
+
     def _fallback_extract(self, description: str) -> dict[str, Any]:
         words = re.findall(r"[A-Za-zÀ-ÿ0-9']+", description.lower())
         stopwords = {

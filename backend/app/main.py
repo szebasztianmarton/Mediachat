@@ -75,6 +75,10 @@ from app.services.session import SessionService
 from app.services.storage import StorageService
 from app.state import AppState
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 _NOT_READY = HTTPException(status_code=503, detail="A szerver még nem áll készen.")
@@ -1243,12 +1247,17 @@ async def _agent_search_add(
     message: str,
     intent: Literal["add", "search"],
 ) -> AgentChatResponse:
-    intent_data = await st.search.ollama.extract_search_intent(message)
-    query = " ".join(intent_data["search_terms"][:2]).strip() or message.strip()
-    logger.info("Agent | search query=%r", query)
+    # Egyetlen LLM-hívás: pontos cím + angol/eredeti fordítás-jelölt (nem
+    # szavankénti keyword-lista) — a Sonarr/Radarr/TMDB elsősorban angol/eredeti
+    # címeket ismer, ezért a fordítás-jelölt nélkül a lokalizált (pl. magyar)
+    # címek gyakran nem adnak találatot.
+    resolved = await st.search.ollama.resolve_title(message)
+    original = resolved["title"]
+    translated = resolved.get("title_en") or original
+    logger.info("Agent | title=%r translated=%r", original, translated)
 
     try:
-        results, suggested_type, _mode = await st.search.search(query, "auto")
+        results, suggested_type, mode = await st.search.search_by_title(original, translated)
     except (ValueError, RuntimeError) as exc:
         logger.warning("Agent | search failed: %s", exc)
         return AgentChatResponse(
@@ -1259,13 +1268,18 @@ async def _agent_search_add(
     if not results:
         return AgentChatResponse(
             action="search",
-            message=f'Nem találtam semmit erre: „{query}".',
+            message=f'Nem találtam semmit erre: „{original}".',
             results=[],
         )
 
     if intent == "add":
         best = results[0]
-        if best.match_score >= 0.45 or len(results) == 1:
+        # Auto-hozzáadás CSAK akkor biztonságos, ha maga az eredeti (a
+        # felhasználó saját szövege) adta ezt a találatot — ha csak a
+        # fordítás-jelölt (LLM-becslés) egyezett rá, az akár egy teljesen
+        # más, félrefordítás miatt véletlenül egyező címre is mutathat, ezért
+        # ilyenkor mindig megerősítést kérünk, a score-tól függetlenül.
+        if mode == "title" and (best.match_score >= 0.45 or len(results) == 1):
             try:
                 added_title, quality_note = await st.search.add(
                     media_type=best.media_type,
@@ -1291,9 +1305,14 @@ async def _agent_search_add(
                     message=f'Megtaláltam, de nem sikerült hozzáadni: {exc}\n\nVálassz egyet manuálisan:',
                     results=results[:5],
                 )
+        confirm_message = (
+            "Több találat is van. Melyiket adjam hozzá?"
+            if mode == "title"
+            else "Csak fordítás alapján találtam egyezést — nézd át, és válaszd ki, melyiket adjam hozzá:"
+        )
         return AgentChatResponse(
             action="search",
-            message="Több találat is van. Melyiket adjam hozzá?",
+            message=confirm_message,
             results=results[:5],
         )
 

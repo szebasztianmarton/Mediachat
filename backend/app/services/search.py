@@ -120,9 +120,21 @@ class SearchService:
             except TmdbError:
                 continue
 
-        ranked = rank_tmdb_results(tmdb_items, intent, limit=10)
-        resolved: list[dict[str, Any]] = []
+        resolved = await self._rank_and_resolve_tmdb(tmdb_items, intent, limit=10)
+        self._cache_lookup_items(resolved)
+        suggested_type = intent.get("media_type_hint") or (resolved[0]["media_type"] if resolved else None)
+        return [self._to_search_result(item) for item in resolved], suggested_type
 
+    async def _rank_and_resolve_tmdb(
+        self,
+        tmdb_items: list[dict[str, Any]],
+        intent: dict[str, Any],
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """TMDB találatok rangsorolása, majd feloldásuk a lokális Sonarr/Radarr
+        könyvtárra (ha ott is megvan, azt preferáljuk — pontosabb metaadat)."""
+        ranked = rank_tmdb_results(tmdb_items, intent, limit=limit)
+        resolved: list[dict[str, Any]] = []
         for item in ranked:
             lookup_item = await self._resolve_tmdb_item(item["media_type"], item["tmdb_id"])
             if lookup_item:
@@ -138,10 +150,90 @@ class SearchService:
                 item["raw"] = item.pop("raw_tmdb")
                 item["lookup_source"] = "tmdb"
             resolved.append(item)
+        return resolved
 
-        self._cache_lookup_items(resolved)
-        suggested_type = intent.get("media_type_hint") or (resolved[0]["media_type"] if resolved else None)
-        return [self._to_search_result(item) for item in resolved], suggested_type
+    async def search_by_title(
+        self,
+        original: str,
+        translated: str | None = None,
+    ) -> tuple[list[SearchResult], Literal["movie", "series"] | None, str]:
+        """Cím alapú keresés közvetlen add/search kéréshez. Az EREDETI (pl. magyar)
+        és a FORDÍTOTT/angol cím-jelöltet PÁRHUZAMOSAN próbálja Sonarr/Radarr/TMDB
+        ellen — nem szekvenciális próbálkozás-majd-fallback, hanem egy körben minden
+        induló hívás. Ez azért fontos, mert a Sonarr/Radarr és a TMDB elsősorban
+        angol/eredeti címeket indexel: egy tisztán lokalizált cím önmagában gyakran
+        nem ad találatot, a fordítás-jelölttel viszont igen — és mivel egyszerre
+        indul minden hívás, ez nem lassítja a választ a sikeres esetben sem."""
+        original = original.strip()
+        translated = (translated or "").strip()
+        if not original and not translated:
+            return [], None, "title"
+        if not (self.sonarr.configured or self.radarr.configured or self.tmdb.configured):
+            raise ValueError("Sonarr, Radarr és TMDB sincs konfigurálva. Állíts be legalább egyet a .env-ben.")
+
+        # Dedupe, sorrend megtartva, üres elem nélkül.
+        variants = list(dict.fromkeys(v for v in (original, translated) if v))
+
+        cache_key = f"search:title:{hashlib.sha256('|'.join(variants).encode()).hexdigest()}"
+        cached = await self.cache.get_json(cache_key)
+        if cached:
+            results = [SearchResult(**item) for item in cached["results"]]
+            return results, cached.get("suggested_type"), cached.get("search_mode", "title")
+
+        tmdb_term = translated or original
+        local_coros = [self._title_search(v) for v in variants]
+        tmdb_coro = self.tmdb.search_multi(tmdb_term) if self.tmdb.configured else None
+        all_coros = local_coros + ([tmdb_coro] if tmdb_coro is not None else [])
+        gathered = await asyncio.gather(*all_coros, return_exceptions=True)
+        local_batches = gathered[: len(local_coros)]
+        tmdb_raw = gathered[len(local_coros)] if tmdb_coro is not None else []
+        if isinstance(tmdb_raw, BaseException):
+            tmdb_raw = []
+
+        # merged[result_id] = (találat, honnan jött a legjobb pontszáma:
+        # "original" = a felhasználó SAJÁT szövege találta el, "translated" =
+        # csak az LLM fordítás-jelöltje vagy a TMDB-út találta el)
+        merged: dict[str, tuple[SearchResult, str]] = {}
+        suggested_type: Literal["movie", "series"] | None = None
+
+        def _consider(r: SearchResult, origin: str) -> None:
+            existing = merged.get(r.result_id)
+            if existing is None or r.match_score > existing[0].match_score:
+                merged[r.result_id] = (r, origin)
+
+        for variant, batch in zip(variants, local_batches):
+            if isinstance(batch, BaseException):
+                continue
+            results, s_type = batch
+            suggested_type = suggested_type or s_type
+            origin = "original" if variant == original else "translated"
+            for r in results:
+                _consider(r, origin)
+
+        best_score = max((r.match_score for r, _origin in merged.values()), default=0.0)
+        if best_score < self.TITLE_MATCH_THRESHOLD and tmdb_raw:
+            minimal_intent = {
+                "search_terms": [tmdb_term], "genres": [], "actors": [],
+                "mood": "", "year": None, "media_type_hint": None,
+            }
+            resolved = await self._rank_and_resolve_tmdb(tmdb_raw, minimal_intent, limit=10)
+            self._cache_lookup_items(resolved)
+            for item in resolved:
+                _consider(self._to_search_result(item), "translated")
+            if not suggested_type and resolved:
+                suggested_type = resolved[0]["media_type"]
+
+        ordered = sorted(merged.values(), key=lambda pair: pair[0].match_score, reverse=True)[:10]
+        results = [r for r, _origin in ordered]
+        # "title" mód = az EREDETI (felhasználó által írt) kifejezés önmagában
+        # erős találatot adott — ez biztonságosan auto-hozzáadható. Ha a
+        # legjobb találat csak a fordítás-jelölt (LLM-becslés) útján jött ki,
+        # "translated" módot adunk vissza — a hívónak ilyenkor mindig
+        # megerősítést kell kérnie, mert egy téves fordítás véletlenül is
+        # egyezhet egy teljesen más, a könyvtárban meglévő címmel.
+        mode = "title" if ordered and ordered[0][1] == "original" else "translated"
+        await self._store_cache(cache_key, results, suggested_type, mode)
+        return results, suggested_type, mode
 
     async def _resolve_tmdb_item(
         self,
