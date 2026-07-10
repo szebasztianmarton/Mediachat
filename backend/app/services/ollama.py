@@ -179,6 +179,24 @@ class OllamaClient:
             logger.error("Ollama ping FAIL — %s", reason)
             return False, reason
 
+    async def list_models(self) -> list[str]:
+        """A szerveren ténylegesen telepített modellek nevei (GET /api/tags)."""
+        if not self.base_url:
+            raise OllamaUnavailable("Nincs konfigurálva (OLLAMA_BASE_URL hiányzik)")
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get(f"{self.base_url}/api/tags")
+        except httpx.ConnectError as exc:
+            raise OllamaUnavailable(f"Kapcsolódási hiba ({exc})") from exc
+        except httpx.TimeoutException as exc:
+            raise OllamaTimeout("/api/tags 5 s timeout") from exc
+        except httpx.HTTPError as exc:
+            raise OllamaError(f"/api/tags hiba: {exc}") from exc
+        if r.status_code != 200:
+            raise OllamaError(f"/api/tags → HTTP {r.status_code}")
+        body = r.json()
+        return [m["name"] for m in body.get("models", []) if m.get("name")]
+
     async def extract_search_intent(self, description: str) -> dict[str, Any]:
         if not self.configured:
             return self._fallback_extract(description)

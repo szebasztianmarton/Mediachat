@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import SettingsNav from "../components/SettingsNav";
 import type { AppSettings } from "../types";
 import { DEFAULT_SETTINGS, SETTINGS_KEY } from "../types";
 import { api, ApiError } from "../utils/api";
+import { clearAuth } from "../utils/auth";
 import { useToast } from "../components/Toast";
 import { logger } from "../utils/logger";
 
@@ -36,6 +37,9 @@ const CONFIG_FIELD_MAP: Array<{ field: keyof AppSettings; key: string; secret: b
   { field: "webhookSecret", key: "webhook_secret", secret: false },
   { field: "telegramNotifyChatId", key: "telegram_notify_chat_id", secret: false },
   { field: "discordNotifyChannelId", key: "discord_notify_channel_id", secret: false },
+  { field: "backupIntervalHours", key: "backup_interval_hours", secret: false },
+  { field: "backupKeepLast", key: "backup_keep_last", secret: false },
+  { field: "userDailyAddQuota", key: "user_daily_add_quota", secret: false },
 ];
 
 interface ConfigView {
@@ -420,6 +424,7 @@ const SERVER_CONFIG_KEYS: Partial<Record<ServiceKey, { value: string; secret?: s
 export default function SettingsPage() {
   const toast = useToast();
   const location = useLocation();
+  const navigate = useNavigate();
   const view = location.pathname.endsWith("/notifications")
     ? "notifications"
     : location.pathname.endsWith("/backup")
@@ -437,6 +442,8 @@ export default function SettingsPage() {
   const [testing, setTesting] = useState<Record<string, boolean>>({});
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [backingUp, setBackingUp] = useState(false);
+  const [restoring, setRestoring] = useState<string | null>(null);
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   // A betöltő effect ezen keresztül hívja a testService-t (ami később definiált).
   const autoTestRef = useRef<((k: ServiceKey) => void) | null>(null);
 
@@ -474,6 +481,41 @@ export default function SettingsPage() {
     }
   }
 
+  async function restoreBackup(filename: string) {
+    let confirmMessage =
+      `Biztosan visszaállítod ezt a mentést: ${filename}?\n\n` +
+      "Ez FELÜLÍRJA a jelenlegi felhasználókat, beszélgetéseket, konfigurációt és " +
+      "tanítófájlokat, és minden bejelentkezett felhasználót (téged is) kiléptet.";
+    try {
+      const preview = await api<{
+        current: { users: number; conversations: number; messages: number; config_overrides: number };
+        backup: { users: number; conversations: number; messages: number; config_overrides: number };
+      }>(`/api/backups/${encodeURIComponent(filename)}/restore/preview`);
+      confirmMessage +=
+        "\n\nJelenlegi → mentésbeli állapot:\n" +
+        `Felhasználók: ${preview.current.users} → ${preview.backup.users}\n` +
+        `Beszélgetések: ${preview.current.conversations} → ${preview.backup.conversations}\n` +
+        `Üzenetek: ${preview.current.messages} → ${preview.backup.messages}\n` +
+        `Config-felülírások: ${preview.current.config_overrides} → ${preview.backup.config_overrides}`;
+    } catch {
+      // Ha a preview nem sikerül, a restore-t még mindig fel kell ajánlani —
+      // csak a diff-szám nélkül, alap figyelmeztetéssel.
+    }
+    if (!window.confirm(confirmMessage)) return;
+    setRestoring(filename);
+    try {
+      await api(`/api/backups/${encodeURIComponent(filename)}/restore`, {
+        method: "POST", timeoutMs: 60_000,
+      });
+      toast.success("Visszaállítás kész — kijelentkeztetés...");
+      clearAuth();
+      navigate("/login", { replace: true });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "A visszaállítás nem sikerült.");
+      setRestoring(null);
+    }
+  }
+
   // A szerver effektív konfigurációjának betöltése — a nem-titkos mezők
   // értéke bekerül az űrlapba, a titkosaknál a placeholder mutatja, hogy be vannak állítva.
   useEffect(() => {
@@ -504,6 +546,14 @@ export default function SettingsPage() {
         }
       })
       .catch(() => { /* backend nélkül a localStorage értékek maradnak */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<{ models: string[] }>("/api/ollama/models")
+      .then((data) => { if (!cancelled) setOllamaModels(data.models ?? []); })
+      .catch(() => { /* Ollama nem elérhető — a szöveges mező marad */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -808,7 +858,23 @@ export default function SettingsPage() {
               result={cardResult("ollama")} onTest={() => testService("ollama")} isTesting={!!testing.ollama}
               startExpanded={!serviceConfigured("ollama")}>
               <Field label="Ollama URL" id="ollama-url" value={settings.ollamaUrl} onChange={(v) => update("ollamaUrl", v)} placeholder="http://localhost:11434" />
-              <Field label="Modell" id="ollama-model" value={settings.ollamaModel} onChange={(v) => update("ollamaModel", v)} placeholder="llama3.2:3b" helpText="Telepített modellek listája: ollama list" />
+              <Field label="Modell" id="ollama-model" value={settings.ollamaModel} onChange={(v) => update("ollamaModel", v)} placeholder="llama3.2:3b" helpText="Kézzel is beírható, vagy válassz a telepítettek közül lent." />
+              {ollamaModels.length > 0 && (
+                <div>
+                  <label htmlFor="ollama-model-select" className="block text-xs font-medium text-gray-600 mb-1.5">Telepített modellek</label>
+                  <select
+                    id="ollama-model-select"
+                    className="input"
+                    value={ollamaModels.includes(settings.ollamaModel) ? settings.ollamaModel : ""}
+                    onChange={(e) => { if (e.target.value) update("ollamaModel", e.target.value); }}
+                  >
+                    <option value="" disabled>Válassz...</option>
+                    {ollamaModels.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </ServiceCard>
 
             <ServiceCard title="TMDB" desc="Film és sorozat metaadatok" brandColor="#01b4e4"
@@ -924,6 +990,29 @@ export default function SettingsPage() {
         </section>
         )}
 
+        {view === "notifications" && (
+        <section style={{ marginBottom: 32 }}>
+          <GroupHeader
+            title="Korlátok"
+            iconPath="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
+          />
+          <div className="card" style={{ padding: "16px 20px" }}>
+            <p className="text-xs text-gray-600" style={{ marginBottom: 14, lineHeight: 1.6 }}>
+              Napi hozzáadási limit userenként — admin szerepkör mindig kivétel. 0 = korlátlan.
+            </p>
+            <div style={{ width: 180 }}>
+              <Field
+                label="Napi hozzáadási limit"
+                id="user-daily-add-quota"
+                value={settings.userDailyAddQuota}
+                onChange={(v) => update("userDailyAddQuota", v)}
+                placeholder="0"
+              />
+            </div>
+          </div>
+        </section>
+        )}
+
         {/* ══ BIZTONSÁGI MENTÉS NÉZET ══ */}
         {view === "backup" && (
           <div style={{ maxWidth: 640 }}>
@@ -941,6 +1030,27 @@ export default function SettingsPage() {
                   {backingUp ? "Mentés..." : "Mentés most"}
                 </button>
               </div>
+              <div style={{ display: "flex", gap: 12, marginTop: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
+                <div style={{ width: 160 }}>
+                  <Field
+                    label="Ütemezés (óránként)"
+                    id="backup-interval"
+                    value={settings.backupIntervalHours}
+                    onChange={(v) => update("backupIntervalHours", v)}
+                    placeholder="24"
+                  />
+                </div>
+                <div style={{ width: 160 }}>
+                  <Field
+                    label="Megőrzött mentések száma"
+                    id="backup-keep-last"
+                    value={settings.backupKeepLast}
+                    onChange={(v) => update("backupKeepLast", v)}
+                    placeholder="14"
+                  />
+                </div>
+                <button onClick={save} className="btn btn-secondary btn-sm">Ütemezés mentése</button>
+              </div>
             </div>
 
             <div className="card overflow-hidden">
@@ -956,9 +1066,17 @@ export default function SettingsPage() {
                 backups.map((b, idx) => (
                   <div key={b.file} style={{ padding: "10px 20px", borderTop: idx > 0 ? "1px solid var(--border-2)" : "none", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                     <span className="text-sm text-gray-800 truncate" style={{ fontFamily: "monospace" }}>{b.file}</span>
-                    <span className="text-xs text-gray-400 shrink-0">
+                    <span className="text-xs text-gray-400 shrink-0" style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       {new Date(b.mtime * 1000).toLocaleString("hu-HU", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                       {" · "}{(b.size_bytes / 1024).toFixed(0)} KB
+                      <button
+                        onClick={() => restoreBackup(b.file)}
+                        disabled={restoring !== null}
+                        className="btn btn-secondary btn-sm"
+                        style={{ padding: "3px 10px" }}
+                      >
+                        {restoring === b.file ? "Visszaállítás..." : "Visszaállítás"}
+                      </button>
                     </span>
                   </div>
                 ))

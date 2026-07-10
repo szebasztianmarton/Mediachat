@@ -75,6 +75,18 @@ class SessionService:
         await db.refresh(session)
         return user, session, plaintext
 
+    async def create_session_for_user(
+        self, db: AsyncSession, user: User, platform: str = "web"
+    ) -> tuple[UserSession, str]:
+        """Session kiadása egy MÁR ellenőrzött felhasználónak (pl. sikeres
+        passkey-hitelesítés után, jelszó nélkül)."""
+        plaintext = secrets.token_urlsafe(32)
+        session = UserSession(user_id=user.id, token=hash_token(plaintext), platform=platform)
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
+        return session, plaintext
+
     async def get_session(self, db: AsyncSession, token: str) -> UserSession | None:
         result = await db.execute(
             select(UserSession)
@@ -101,6 +113,23 @@ class SessionService:
     async def revoke_session(self, db: AsyncSession, session_id: str) -> None:
         await db.execute(delete(UserSession).where(UserSession.id == session_id))
         await db.commit()
+
+    async def list_sessions(self, db: AsyncSession, user_id: str) -> list[UserSession]:
+        result = await db.execute(
+            select(UserSession)
+            .where(UserSession.user_id == user_id)
+            .order_by(UserSession.last_seen_at.desc())
+        )
+        return list(result.scalars().all())
+
+    async def revoke_own_session(self, db: AsyncSession, user_id: str, session_id: str) -> bool:
+        """Csak a SAJÁT session-jeit engedi kirúgni egy usernek — ownership-ellenőrzéssel,
+        hogy más felhasználó munkamenetét ne lehessen az azonosító kitalálásával törölni."""
+        result = await db.execute(
+            delete(UserSession).where(UserSession.id == session_id, UserSession.user_id == user_id)
+        )
+        await db.commit()
+        return result.rowcount > 0
 
     async def create_user(
         self,

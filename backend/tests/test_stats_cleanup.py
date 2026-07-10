@@ -36,6 +36,59 @@ def test_torrent_cleanup_log_endpoint(client, admin_token):
     assert body["auto_delete_hours"] == 0
 
 
+def _seed_added_event(user_id: str, title: str) -> None:
+    import asyncio
+
+    async def _write() -> None:
+        from app.db.database import SessionLocal
+        from app.db.models import MediaEvent
+
+        async with SessionLocal() as db:
+            db.add(
+                MediaEvent(
+                    user_id=user_id, media_type="movie", external_id=1,
+                    tmdb_id=None, title=title, event_type="added",
+                )
+            )
+            await db.commit()
+
+    asyncio.run(_write())
+
+
+def test_audit_log_shows_who_added_what(client, admin_token):
+    client.post(
+        "/api/users",
+        headers=_headers(admin_token),
+        json={"username": "audituser", "password": "audituser1", "role": "user"},
+    )
+    token = client.post(
+        "/api/auth/login", json={"username": "audituser", "password": "audituser1"}
+    ).json()["token"]
+    user_id = client.get("/api/auth/me", headers=_headers(token)).json()["id"]
+
+    _seed_added_event(user_id, "Audit teszt film")
+
+    res = client.get("/api/audit", headers=_headers(admin_token))
+    assert res.status_code == 200
+    entries = res.json()["entries"]
+    match = next((e for e in entries if e["title"] == "Audit teszt film"), None)
+    assert match is not None
+    assert match["user"] == "audituser"
+    assert match["type"] == "added"
+
+
+def test_audit_log_requires_admin(client, admin_token):
+    client.post(
+        "/api/users",
+        headers=_headers(admin_token),
+        json={"username": "audituser2", "password": "audituser1", "role": "user"},
+    )
+    token = client.post(
+        "/api/auth/login", json={"username": "audituser2", "password": "audituser1"}
+    ).json()["token"]
+    assert client.get("/api/audit", headers=_headers(token)).status_code == 403
+
+
 def test_torrent_delete_requires_configured_client(client, admin_token):
     res = client.delete("/api/torrents/abc123", headers=_headers(admin_token))
     assert res.status_code == 400  # nincs torrent kliens konfigurálva

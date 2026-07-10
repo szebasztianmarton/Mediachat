@@ -13,6 +13,7 @@ from app.services.search import SearchService
 from app.services.session import SessionService
 from app.services.storage import StorageService
 from app.services.torrents import TorrentService
+from app.services.webauthn_service import WebauthnService
 
 
 @dataclass
@@ -30,6 +31,7 @@ class AppState:
     library: LibraryService
     backup: BackupService
     jellyfin: JellyfinClient
+    webauthn: WebauthnService
 
 
 app_state: AppState | None = None

@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_secret: str = "change-me"
     app_url: str = "http://localhost:8000"
+    # "text" (ember-olvasható) vagy "json" (Grafana/Loki-barát strukturált sorok)
+    log_format: str = "text"
 
     # Első indításkor létrehozott admin fiók
     admin_username: str = "admin"
@@ -82,6 +84,20 @@ class Settings(BaseSettings):
     plex_token: str = ""
     jellyfin_url: str = ""
     jellyfin_api_key: str = ""
+
+    # Automatikus adatmentés
+    backup_interval_hours: int = 24
+    backup_keep_last: int = 14
+
+    # Passkey (WebAuthn) — éles környezetben a tényleges domainhez/IP-hez kell
+    # igazítani (RP ID = a domain hostname, origin = a teljes URL, port nélkül
+    # nem számít lokalhoston kívül HTTPS nélkül a legtöbb böngésző elutasítja).
+    webauthn_rp_id: str = "localhost"
+    webauthn_rp_name: str = "Mediachat"
+    webauthn_origin: str = "http://localhost:3100"
+
+    # Napi hozzáadási limit userenként (0 = korlátlan); admin szerepkör kivétel.
+    user_daily_add_quota: int = 0
 
 
 settings = Settings()

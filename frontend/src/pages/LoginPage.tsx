@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { browserSupportsWebAuthn, startAuthentication } from "@simplewebauthn/browser";
+import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
 import type { ApiUser } from "../types";
 import { api, ApiError } from "../utils/api";
 import { setAuth } from "../utils/auth";
@@ -12,6 +14,48 @@ export default function LoginPage() {
   const [showPass, setShowPass] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
+  const passkeySupported = browserSupportsWebAuthn();
+
+  function afterLogin(data: { token: string; user: ApiUser }) {
+    setAuth({
+      token: data.token,
+      userId: data.user.id,
+      username: data.user.username ?? data.user.display_name,
+      role: data.user.role,
+    });
+    logger.success("auth", `Bejelentkezés sikeres: ${data.user.username} (${data.user.role})`);
+    const setupDone = localStorage.getItem(`mediachat-setup-${data.user.id}`);
+    if (!setupDone) {
+      navigate("/setup");
+    } else {
+      navigate(data.user.role === "admin" ? "/dashboard" : "/chat");
+    }
+  }
+
+  async function handlePasskeyLogin() {
+    setError("");
+    setPasskeyLoading(true);
+    try {
+      const begin = await api<{ ceremony_id: string; options: PublicKeyCredentialRequestOptionsJSON }>(
+        "/api/auth/webauthn/login/begin", { method: "POST" }
+      );
+      const credential = await startAuthentication({ optionsJSON: begin.options });
+      const data = await api<{ token: string; user: ApiUser }>("/api/auth/webauthn/login/finish", {
+        method: "POST",
+        body: JSON.stringify({ ceremony_id: begin.ceremony_id, credential }),
+      });
+      afterLogin(data);
+    } catch (err) {
+      if (err instanceof Error && err.name === "NotAllowedError") {
+        // Megszakította a böngésző dialógusát — nincs teendő.
+      } else {
+        setError("A passkey bejelentkezés nem sikerült. Próbáld a jelszavaddal.");
+      }
+    } finally {
+      setPasskeyLoading(false);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -22,20 +66,7 @@ export default function LoginPage() {
         method: "POST",
         body: JSON.stringify({ username, password }),
       });
-      setAuth({
-        token: data.token,
-        userId: data.user.id,
-        username: data.user.username ?? data.user.display_name,
-        role: data.user.role,
-      });
-      logger.success("auth", `Bejelentkezés sikeres: ${data.user.username} (${data.user.role})`);
-      // Első bejelentkezéskor téma-setup, utána a szokásos kezdőoldal
-      const setupDone = localStorage.getItem(`mediachat-setup-${data.user.id}`);
-      if (!setupDone) {
-        navigate("/setup");
-      } else {
-        navigate(data.user.role === "admin" ? "/dashboard" : "/chat");
-      }
+      afterLogin(data);
     } catch (err) {
       logger.warn("auth", `Sikertelen belépési kísérlet: ${username || "(üres)"}`);
       setError(
@@ -222,6 +253,18 @@ export default function LoginPage() {
               )}
             </button>
           </form>
+
+          {passkeySupported && (
+            <button
+              type="button"
+              onClick={handlePasskeyLogin}
+              disabled={passkeyLoading}
+              className="btn btn-secondary"
+              style={{ width: "100%", height: 38, fontSize: 14, marginTop: 12, justifyContent: "center" }}
+            >
+              {passkeyLoading ? "Passkey ellenőrzése..." : "Bejelentkezés passkey-vel"}
+            </button>
+          )}
 
           <div
             style={{

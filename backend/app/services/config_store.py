@@ -36,6 +36,9 @@ EDITABLE_KEYS: frozenset[str] = frozenset(
         "webhook_secret",
         "telegram_notify_chat_id",
         "discord_notify_channel_id",
+        "backup_interval_hours",
+        "backup_keep_last",
+        "user_daily_add_quota",
     }
 )
 

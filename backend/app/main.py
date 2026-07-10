@@ -16,6 +16,7 @@ from app.config import settings
 from app.db.database import SessionLocal, get_db, init_db
 from app.db.models import User, UserSession
 from app.deps import get_admin_session, get_required_session
+from app.logging_config import configure_logging
 from app.models import (
     AddRequest,
     AddResponse,
@@ -73,12 +74,10 @@ from app.services.recommendations import RecommendationService
 from app.services.search import SearchService
 from app.services.session import SessionService
 from app.services.storage import StorageService
+from app.services.webauthn_service import WebauthnService, WebauthnServiceError
 from app.state import AppState
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+configure_logging(settings.log_format)
 logger = logging.getLogger(__name__)
 
 _NOT_READY = HTTPException(status_code=503, detail="A szerver még nem áll készen.")
@@ -139,6 +138,7 @@ async def lifespan(app: FastAPI):
         library=LibraryService(),
         backup=BackupService(),
         jellyfin=JellyfinClient(),
+        webauthn=WebauthnService(cache),
     )
 
     async with SessionLocal() as db:
@@ -207,6 +207,53 @@ def _user_info(user: User) -> UserInfo:
     )
 
 
+async def _enforce_add_quota(db: AsyncSession, session: UserSession) -> None:
+    """Napi hozzáadási limit userenként — admin mindig kivétel. A limit
+    settings.user_daily_add_quota (0 = korlátlan), a Beállításokból állítható."""
+    quota = settings.user_daily_add_quota
+    if quota <= 0 or session.user.role == "admin":
+        return
+
+    from datetime import UTC as _UTC, datetime as _dt, timedelta as _td
+
+    from sqlalchemy import func as _func, select as _select
+
+    from app.db.models import AddJob, MediaEvent
+
+    since = _dt.now(_UTC) - _td(days=1)
+
+    async def _count(stmt) -> int:
+        return int((await db.execute(stmt)).scalar() or 0)
+
+    # Befejezett hozzáadások (szinkron út + kész async jobok).
+    completed = await _count(
+        _select(_func.count())
+        .select_from(MediaEvent)
+        .where(
+            MediaEvent.user_id == session.user_id,
+            MediaEvent.event_type == "added",
+            MediaEvent.created_at >= since,
+        )
+    )
+    # Még FOLYAMATBAN lévő async jobok is beleszámítanak — különben a limit
+    # egyetlen burst-tel (sok egyidejű enqueue, mielőtt bármelyik lefutna)
+    # kikerülhető lenne.
+    pending = await _count(
+        _select(_func.count())
+        .select_from(AddJob)
+        .where(
+            AddJob.user_id == session.user_id,
+            AddJob.status.in_(("queued", "processing")),
+            AddJob.created_at >= since,
+        )
+    )
+    if completed + pending >= quota:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Elérted a napi hozzáadási limitet ({quota}/nap). Próbáld újra holnap.",
+        )
+
+
 # ── Health ───────────────────────────────────────────────────────────────────
 
 
@@ -267,9 +314,111 @@ async def logout(
     return {"success": True}
 
 
+# ── Passkey (WebAuthn) — kiegészítő login-mód a jelszó mellett ─────────────────
+
+
+@app.post("/api/auth/webauthn/register/begin")
+async def webauthn_register_begin(
+    session: UserSession = Depends(get_required_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    return await _state().webauthn.begin_registration(db, session.user)
+
+
+@app.post("/api/auth/webauthn/register/finish")
+async def webauthn_register_finish(
+    payload: dict,
+    session: UserSession = Depends(get_required_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    credential = payload.get("credential")
+    if not isinstance(credential, dict):
+        raise HTTPException(status_code=422, detail="Hiányzó 'credential' mező.")
+    try:
+        cred = await _state().webauthn.finish_registration(
+            db, session.user, credential, name=payload.get("name", "Passkey")
+        )
+    except WebauthnServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"id": cred.id, "name": cred.name}
+
+
+@app.get("/api/auth/webauthn/credentials")
+async def webauthn_list_credentials(
+    session: UserSession = Depends(get_required_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    creds = await _state().webauthn.list_credentials(db, session.user_id)
+    return {"credentials": [{"id": c.id, "name": c.name, "created_at": c.created_at.isoformat()} for c in creds]}
+
+
+@app.delete("/api/auth/webauthn/credentials/{credential_id}")
+async def webauthn_delete_credential(
+    credential_id: str,
+    session: UserSession = Depends(get_required_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, bool]:
+    await _state().webauthn.delete_credential(db, session.user_id, credential_id)
+    return {"success": True}
+
+
+@app.post("/api/auth/webauthn/login/begin")
+async def webauthn_login_begin() -> dict:
+    return await _state().webauthn.begin_authentication()
+
+
+@app.post("/api/auth/webauthn/login/finish", response_model=LoginResponse)
+async def webauthn_login_finish(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+) -> LoginResponse:
+    ceremony_id = payload.get("ceremony_id")
+    credential = payload.get("credential")
+    if not ceremony_id or not isinstance(credential, dict):
+        raise HTTPException(status_code=422, detail="Hiányzó 'ceremony_id' vagy 'credential' mező.")
+    try:
+        user = await _state().webauthn.finish_authentication(db, ceremony_id, credential)
+    except WebauthnServiceError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    session, plaintext_token = await _state().session.create_session_for_user(db, user)
+    return LoginResponse(token=plaintext_token, user=_user_info(user))
+
+
 @app.get("/api/auth/me", response_model=UserInfo)
 async def me(session: UserSession = Depends(get_required_session)) -> UserInfo:
     return _user_info(session.user)
+
+
+@app.get("/api/auth/sessions")
+async def list_sessions(
+    session: UserSession = Depends(get_required_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    sessions = await _state().session.list_sessions(db, session.user_id)
+    return {
+        "sessions": [
+            {
+                "id": s.id,
+                "platform": s.platform,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+                "last_seen_at": s.last_seen_at.isoformat() if s.last_seen_at else None,
+                "is_current": s.id == session.id,
+            }
+            for s in sessions
+        ]
+    }
+
+
+@app.delete("/api/auth/sessions/{session_id}")
+async def revoke_session(
+    session_id: str,
+    session: UserSession = Depends(get_required_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, bool]:
+    revoked = await _state().session.revoke_own_session(db, session.user_id, session_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="A munkamenet nem található.")
+    return {"success": True}
 
 
 # ── Users (admin) ────────────────────────────────────────────────────────────
@@ -383,6 +532,7 @@ async def add_media(
     session: UserSession = Depends(get_required_session),
 ) -> AddResponse:
     st = _state()
+    await _enforce_add_quota(db, session)
 
     if payload.async_job:
         job = await st.queue.enqueue_add(
@@ -609,6 +759,16 @@ def _reload_service_clients(st: AppState) -> None:
 @app.get("/api/config", response_model=ConfigResponse)
 async def get_config(_: UserSession = Depends(get_admin_session)) -> ConfigResponse:
     return ConfigResponse(**config_store.config_view())
+
+
+@app.get("/api/ollama/models")
+async def list_ollama_models(_: UserSession = Depends(get_admin_session)) -> dict:
+    try:
+        models = await _state().search.ollama.list_models()
+    except OllamaError as exc:
+        logger.warning("Ollama modell-lista lekérés sikertelen: %s", exc)
+        return {"models": []}
+    return {"models": models}
 
 
 _TESTABLE_SERVICES = {"sonarr", "radarr", "ollama", "tmdb", "torrent", "plex", "jellyfin"}
@@ -958,6 +1118,59 @@ async def get_stats(
     }
 
 
+@app.get("/api/audit")
+async def audit_log(
+    limit: int = 200,
+    _: UserSession = Depends(get_admin_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Ki mit adott hozzá/kedvelt/dobott el, és mely torrentek törlődtek
+    automatikusan — egy időrendbe rendezett admin-nézet a MediaEvent és
+    TorrentCleanupLog táblákból (nincs külön audit-tábla, ezek már gyűjtik az adatot)."""
+    from sqlalchemy import select as _select
+
+    from app.db.models import MediaEvent, TorrentCleanupLog, User
+
+    limit = max(1, min(limit, 500))
+
+    event_rows = (
+        await db.execute(
+            _select(MediaEvent, User.username)
+            .join(User, User.id == MediaEvent.user_id)
+            .order_by(MediaEvent.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    cleanup_rows = (
+        await db.execute(
+            _select(TorrentCleanupLog).order_by(TorrentCleanupLog.deleted_at.desc()).limit(limit)
+        )
+    ).scalars().all()
+
+    entries = [
+        {
+            "type": event.event_type,
+            "user": username,
+            "title": event.title,
+            "media_type": event.media_type,
+            "created_at": event.created_at.isoformat() if event.created_at else None,
+        }
+        for event, username in event_rows
+    ] + [
+        {
+            "type": "torrent_cleanup",
+            "user": None,
+            "title": log.name,
+            "media_type": None,
+            "created_at": log.deleted_at.isoformat() if log.deleted_at else None,
+            "mode": log.mode,
+        }
+        for log in cleanup_rows
+    ]
+    entries.sort(key=lambda e: e["created_at"] or "", reverse=True)
+    return {"entries": entries[:limit]}
+
+
 # ── Könyvtár-analitika + naptár + backup (admin) ─────────────────────────────
 
 
@@ -1012,6 +1225,29 @@ async def create_backup(request: Request, _: UserSession = Depends(get_admin_ses
 
     result = await _state().backup.create_backup(datetime.now(UTC).isoformat(timespec="seconds"))
     return result
+
+
+@app.get("/api/backups/{filename}/restore/preview")
+async def preview_restore_backup(filename: str, _: UserSession = Depends(get_admin_session)) -> dict:
+    from app.services.backup import BackupRestoreError
+
+    try:
+        return await _state().backup.preview_restore(filename)
+    except BackupRestoreError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/backups/{filename}/restore")
+async def restore_backup(filename: str, _: UserSession = Depends(get_admin_session)) -> dict:
+    from app.services.backup import BackupRestoreError
+
+    try:
+        result = await _state().backup.restore_backup(filename)
+    except BackupRestoreError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # A user-tábla cseréje miatt a jelenlegi admin session (és minden más) is
+    # törlődött a restore során — a kliensnek ki kell léptetnie a felhasználót.
+    return {"restored": result, "logout_required": True}
 
 
 # ── Storage (admin) ──────────────────────────────────────────────────────────
@@ -1246,6 +1482,8 @@ async def _agent_search_add(
     st: AppState,
     message: str,
     intent: Literal["add", "search"],
+    db: AsyncSession,
+    session: UserSession,
 ) -> AgentChatResponse:
     # Egyetlen LLM-hívás: pontos cím + angol/eredeti fordítás-jelölt (nem
     # szavankénti keyword-lista) — a Sonarr/Radarr/TMDB elsősorban angol/eredeti
@@ -1281,10 +1519,15 @@ async def _agent_search_add(
         # ilyenkor mindig megerősítést kérünk, a score-tól függetlenül.
         if mode == "title" and (best.match_score >= 0.45 or len(results) == 1):
             try:
+                await _enforce_add_quota(db, session)
                 added_title, quality_note = await st.search.add(
                     media_type=best.media_type,
                     external_id=best.external_id,
                     title=best.title,
+                    tmdb_id=best.tmdb_id,
+                )
+                await st.search.record_event(
+                    db, session.user_id, best.media_type, best.external_id, added_title, "added",
                     tmdb_id=best.tmdb_id,
                 )
                 type_label = "sorozat" if best.media_type == "series" else "film"
@@ -1328,6 +1571,7 @@ async def _agent_search_add(
 @app.post("/api/chat/agent", response_model=AgentChatResponse)
 async def chat_agent(
     payload: AgentChatRequest,
+    db: AsyncSession = Depends(get_db),
     session: UserSession = Depends(get_required_session),
 ) -> AgentChatResponse:
     st = _state()
@@ -1341,7 +1585,7 @@ async def chat_agent(
     logger.info("Agent | intent=%s | msg=%r", intent, payload.message[:80])
 
     if intent in ("search", "add"):
-        return await _agent_search_add(st, payload.message, intent)
+        return await _agent_search_add(st, payload.message, intent, db, session)
 
     # intent == "chat" → Ollama szabad válasz
     reply = await _ollama_reply(payload.message, DEFAULT_AGENT_PROMPT)
@@ -1388,7 +1632,7 @@ async def chat_agent_stream(
 
             try:
                 if intent in ("search", "add"):
-                    result = await _agent_search_add(st, payload.message, intent)
+                    result = await _agent_search_add(st, payload.message, intent, db, session)
                     yield sse({"type": "result", "payload": result.model_dump()})
                     reply_content = result.message
                     reply_action = result.action
@@ -1424,6 +1668,10 @@ async def chat_agent_stream(
                             f"('{settings.ollama_model}') létezik-e a szerveren."
                         )
                         yield sse({"type": "error", "message": reply_content})
+            except HTTPException as exc:
+                reply_role = "error"
+                reply_content = str(exc.detail)
+                yield sse({"type": "error", "message": reply_content})
             except Exception:  # noqa: BLE001
                 logger.exception("Agent stream hiba")
                 reply_role = "error"

@@ -11,6 +11,11 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - media-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-media_bot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -20,6 +25,11 @@ services:
       - redis_data:/data
     networks:
       - media-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   ollama:
     image: ollama/ollama:latest
@@ -50,9 +60,12 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - postgres
-      - redis
-      - ollama
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
     networks:
       - media-net
 
@@ -64,7 +77,8 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - media-net
 

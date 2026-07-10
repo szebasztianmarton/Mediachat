@@ -1,12 +1,15 @@
 const THEME_KEY = "mediachat-theme";
 
-export type Theme = "light" | "dark" | "threed" | "modern";
+export type Theme = "light" | "dark" | "threed" | "modern" | "sepia" | "glass" | "nordic";
 
 export const THEMES: { id: Theme; label: string; description: string }[] = [
   { id: "light", label: "E-ink", description: "Papírfehér, monokróm, azonnali — reMarkable stílus" },
   { id: "dark", label: "Sötét", description: "Mély sötét, magas kontraszt, e-ink karakterrel" },
   { id: "threed", label: "3D", description: "Lágy árnyékok, mélység, kék akcentus" },
   { id: "modern", label: "Modern", description: "Sötét indigó, Linear-stílusú felület" },
+  { id: "sepia", label: "Szépia", description: "Meleg papír, borostyán akcentus — olvasásra tervezve" },
+  { id: "glass", label: "Üveg", description: "Sötét, homályüveg panelek, neon türkiz kiemelés" },
+  { id: "nordic", label: "Északi", description: "Világos, zsályezöld akcentus, bőséges fehértér" },
 ];
 
 const VALID = new Set<string>(THEMES.map((t) => t.id));

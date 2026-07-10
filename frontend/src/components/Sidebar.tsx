@@ -53,6 +53,12 @@ const NAV_ITEMS: NavItemDef[] = [
     adminOnly: true,
   },
   {
+    label: "Audit napló",
+    href: "/audit",
+    icon: "M9 12h6m-6 3h6m-7.5 6h9a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0016.5 4.5h-1.875a1.125 1.125 0 01-1.125-1.125v-.375A1.125 1.125 0 0012.375 2h-1.5a1.125 1.125 0 00-1.125 1.125v.375A1.125 1.125 0 018.625 4.5H6.75A2.25 2.25 0 004.5 6.75v12.75A2.25 2.25 0 006.75 21z",
+    adminOnly: true,
+  },
+  {
     label: "Beállítások",
     href: "/settings",
     icon: "M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z M15 12a3 3 0 11-6 0 3 3 0 016 0z",
@@ -79,7 +85,22 @@ const sidebarColors = {
   actionHoverColor: "var(--primary-ink)",
 };
 
-export default function Sidebar({ open = false, onNavigate }: { open?: boolean; onNavigate?: () => void }) {
+export const SIDEBAR_WIDTH = 240;
+export const SIDEBAR_COLLAPSED_WIDTH = 68;
+
+export default function Sidebar({
+  open = false,
+  onNavigate,
+  onClose,
+  collapsed = false,
+  onToggleCollapse,
+}: {
+  open?: boolean;
+  onNavigate?: () => void;
+  onClose?: () => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
+}) {
   const navigate = useNavigate();
   const auth = getAuth();
   const isAdmin = auth?.role === "admin";
@@ -106,12 +127,14 @@ export default function Sidebar({ open = false, onNavigate }: { open?: boolean; 
   const visibleItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
   const c = sidebarColors;
 
+  const width = collapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH;
+
   return (
     <aside
-      className={`app-sidebar${open ? " app-sidebar--open" : ""}`}
+      className={`app-sidebar${open ? " app-sidebar--open" : ""}${collapsed ? " app-sidebar--collapsed" : ""}`}
       style={{
-        width: 240,
-        minWidth: 240,
+        width,
+        minWidth: width,
         background: c.bg,
         borderRight: c.border,
         display: "flex",
@@ -123,54 +146,116 @@ export default function Sidebar({ open = false, onNavigate }: { open?: boolean; 
         zIndex: 50,
       }}
     >
+      {/* Sidebar összecsukó gomb (csak desktopon) */}
+      {onToggleCollapse && (
+        <button
+          type="button"
+          className="sidebar-collapse-btn desktop-only"
+          title={collapsed ? "Menü kinyitása" : "Menü összecsukása"}
+          aria-label={collapsed ? "Menü kinyitása" : "Menü összecsukása"}
+          onClick={onToggleCollapse}
+        >
+          <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+            {collapsed ? (
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+            ) : (
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+            )}
+          </svg>
+        </button>
+      )}
+
       {/* Logo */}
       <div
         style={{
-          padding: "0 16px",
+          padding: collapsed ? "0 8px" : "0 12px 0 16px",
           height: 56,
           borderBottom: `1px solid ${c.divider}`,
           display: "flex",
           alignItems: "center",
-          gap: 10,
+          justifyContent: collapsed ? "center" : "space-between",
           flexShrink: 0,
         }}
       >
-        <div
-          style={{
-            width: 28,
-            height: 28,
-            background: c.logoIconBg,
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexShrink: 0,
-          }}
-        >
-          <svg width="15" height="15" fill="none" stroke={c.logoIconStroke} strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3" />
-          </svg>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              background: c.logoIconBg,
+              borderRadius: 6,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <svg width="15" height="15" fill="none" stroke={c.logoIconStroke} strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3" />
+            </svg>
+          </div>
+          {!collapsed && (
+            <span
+              style={{
+                fontSize: 16,
+                fontWeight: 600,
+                color: c.logoText,
+                letterSpacing: "-0.02em",
+                fontFamily: "'EB Garamond', Georgia, serif",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              Media Assistant
+            </span>
+          )}
         </div>
-        <span
-          style={{
-            fontSize: 16,
-            fontWeight: 600,
-            color: c.logoText,
-            letterSpacing: "-0.02em",
-            fontFamily: "'EB Garamond', Georgia, serif",
-          }}
-        >
-          Media Assistant
-        </span>
+
+        {/* Bezárás gomb — csak mobilon, nyitott állapotban, egyértelműen a
+            sidebaron belül, nem ütközik semmivel. */}
+        {!collapsed && onClose && (
+          <button
+            type="button"
+            className="mobile-only"
+            aria-label="Menü bezárása"
+            onClick={onClose}
+            style={{
+              width: 32,
+              height: 32,
+              flexShrink: 0,
+              alignItems: "center",
+              justifyContent: "center",
+              background: "transparent",
+              border: "none",
+              borderRadius: 6,
+              color: c.actionColor,
+              cursor: "pointer",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = c.actionHoverBg;
+              e.currentTarget.style.color = c.actionHoverColor;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = c.actionColor;
+            }}
+          >
+            <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Navigation */}
-      <nav style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
+      <nav style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "8px 0" }}>
         {visibleItems.map((item) => (
           <NavLink
             key={item.href}
             to={item.href}
             onClick={onNavigate}
+            title={collapsed ? item.label : undefined}
             className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
           >
             <svg
@@ -185,7 +270,7 @@ export default function Sidebar({ open = false, onNavigate }: { open?: boolean; 
             >
               <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
             </svg>
-            {item.label}
+            {!collapsed && item.label}
           </NavLink>
         ))}
       </nav>
@@ -200,12 +285,20 @@ export default function Sidebar({ open = false, onNavigate }: { open?: boolean; 
       >
         {auth && (
           <div
+            onClick={() => navigate("/profile")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") navigate("/profile"); }}
+            title={collapsed ? `${auth.username} (${auth.role === "admin" ? "Admin" : "Felhasználó"}) — Fiókom` : "Fiókom"}
             style={{
               display: "flex",
               alignItems: "center",
+              justifyContent: collapsed ? "center" : "flex-start",
               gap: 9,
               padding: "6px 4px",
               marginBottom: 8,
+              borderRadius: 6,
+              cursor: "pointer",
             }}
           >
             <div
@@ -226,36 +319,40 @@ export default function Sidebar({ open = false, onNavigate }: { open?: boolean; 
             >
               {auth.username[0].toUpperCase()}
             </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div
-                style={{
-                  fontSize: 12.5,
-                  fontWeight: 500,
-                  color: c.userText,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  lineHeight: 1.35,
-                }}
-              >
-                {auth.username}
+            {!collapsed && (
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 12.5,
+                    fontWeight: 500,
+                    color: c.userText,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    lineHeight: 1.35,
+                  }}
+                >
+                  {auth.username}
+                </div>
+                <div style={{ fontSize: 11, color: c.userSubText, lineHeight: 1.3 }}>
+                  {auth.role === "admin" ? "Admin" : "Felhasználó"}
+                </div>
               </div>
-              <div style={{ fontSize: 11, color: c.userSubText, lineHeight: 1.3 }}>
-                {auth.role === "admin" ? "Admin" : "Felhasználó"}
-              </div>
-            </div>
+            )}
           </div>
         )}
 
-        <div style={{ display: "flex", gap: 6, position: "relative" }}>
+        <div style={{ display: "flex", flexDirection: collapsed ? "column" : "row", gap: 6, position: "relative" }}>
           {/* Témaválasztó popover */}
           {themeMenuOpen && (
             <div
               style={{
                 position: "absolute",
-                bottom: 38,
+                bottom: collapsed ? 76 : 38,
                 left: 0,
                 width: 200,
+                maxHeight: 320,
+                overflowY: "auto",
                 background: "var(--surface)",
                 border: "1px solid var(--border)",
                 borderRadius: "var(--radius)",

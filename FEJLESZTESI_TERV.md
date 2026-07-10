@@ -1,6 +1,6 @@
 # Mediachat — Fejlesztési terv és állapotjelentés
 
-*Utolsó frissítés: 2026-07-05 (6. kör — analitika, naptár, Settings-hub, backup, Jellyfin-fix)*
+*Utolsó frissítés: 2026-07-10 (ötletlista bővítve — l. 3. szakasz P4 és 4. szakasz vége; a 6. kör óta munkakönyvtárban: passkey/WebAuthn, backup-restore, Ollama modell-lista végpont, 3 új téma — még nincs commitolva)*
 
 ---
 
@@ -155,6 +155,31 @@ Amit a átvizsgálás feltárt, de **tudatosan még nincs javítva**:
 21. **Modellválasztó a UI-ból** — Ollama `/api/tags` lista, modellváltás chat közben
 22. **Felhasználói kvóták** — user-enkénti napi/heti hozzáadási limit
 23. **Audit log** — ki mit adott hozzá/törölt, admin nézettel
+
+### P4 — Új ötletek (backlog, még nincs priorizálva) — 2026-07-10
+
+**Biztonság**
+
+24. 🔧 **Passkey (WebAuthn) login** — folyamatban a munkakönyvtárban (`webauthn_service.py`, `webauthn_credentials` tábla, register/login/list/delete végpontok, `SessionService.create_session_for_user` jelszó nélküli session-kiadáshoz); hátra van: frontend UI (Login gomb, Settings-kártya a regisztrált kulcsokhoz), és a `webauthn_origin`/`webauthn_rp_id` élesben a tényleges domainre állítása
+25. **Aktív session-ek / eszközök kezelése** — Settings-kártya a bejelentkezett eszközökről (platform, utolsó aktivitás, IP), egyenkénti kirúgás — logikus párja a passkey-nek, mert onnantól több hitelesítési mód fut egyszerre
+26. **TOTP mint második faktor** — jelszó/passkey mellé opcionális időalapú kód, admin fiókra kötelezővé tehető
+27. **Mentés-titkosítás** — a `data/backups/*.json` jelszó-hasheket, session-tokent és API-kulcsokat (config overrides) is tartalmaz; egy külön mentési jelszóval AES-titkosítás, mielőtt lemezre kerül
+
+**Backup & restore**
+
+28. **Backup visszaállítás előnézete** — a most implementált `POST /api/backups/{filename}/restore` jelenleg vakon felülír; egy `GET .../restore/preview` diffet mutathatna (hány user/beszélgetés/config-kulcs változna) commitolás előtt
+29. **Off-site mentés** — rclone/S3-kompatibilis célra másolás a helyi 14 mentés mellett, homelab-lemezhiba esetére
+
+**Integrációk**
+
+30. 🔧 **Modellválasztó a UI-ból** (l. P3 #21) — a `GET /api/ollama/models` végpont kész a munkakönyvtárban, csak a UI-kötés (Settings dropdown vagy ChatPage modellváltó) hiányzik még
+31. **Overseerr/Ombi-stílusú kérés-jóváhagyás** — nem-admin userek "kérhetnek" médiát ahelyett, hogy közvetlen hozzáadási jogot kapnának; admin egy kattintással jóváhagy/elutasít a Jobs oldal mintájára
+32. **Web Push értesítés** — Telegram/Discord mellett natív böngésző-push a letöltés-kész eseményre; a PWA infrastruktúra (service worker) már megvan hozzá
+
+**Infrastruktúra**
+
+33. **Strukturált logging** — jelenleg `logging.basicConfig` sima szöveges kimenettel; homelab Grafana/Loki-integrációhoz JSON-log formátum hasznos lenne
+34. **Docker healthcheck** — a compose-ban egészség-ellenőrzés + auto-restart policy a backend/worker konténerekre
 
 ---
 

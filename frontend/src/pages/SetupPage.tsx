@@ -14,10 +14,17 @@ const PREVIEW: Record<Theme, { bg: string; card: string; border: string; ink: st
   dark:   { bg: "#141414", card: "#1E1E1E", border: "#2E2E2E", ink: "#F0F0F0", accent: "#F0F0F0" },
   threed: { bg: "#E9EDF3", card: "#FFFFFF", border: "#E3E8F0", ink: "#1A2233", accent: "#4F6BED" },
   modern: { bg: "#0F1117", card: "#171A23", border: "#262B38", ink: "#EDEEF2", accent: "#6E7CFF" },
+  sepia:  { bg: "#F4ECDC", card: "#FBF6EA", border: "#E0D2B0", ink: "#3B2F1E", accent: "#8A5A32" },
+  glass:  { bg: "#0A0E17", card: "#161B26", border: "rgba(255,255,255,0.14)", ink: "#EAF2FF", accent: "#00E5C7" },
+  nordic: { bg: "#F3F6F4", card: "#FFFFFF", border: "#DCE8E0", ink: "#22322A", accent: "#4F9A72" },
 };
+
+// A "rounded" témák nagyobb sugarú, lágyabb sarkokat és emelt kártyát kapnak az előnézetben
+const ROUNDED_THEMES = new Set<Theme>(["threed", "modern", "glass", "nordic"]);
 
 function ThemePreview({ themeId }: { themeId: Theme }) {
   const p = PREVIEW[themeId];
+  const rounded = ROUNDED_THEMES.has(themeId);
   return (
     <div
       className="theme-swatch"
@@ -28,8 +35,8 @@ function ThemePreview({ themeId }: { themeId: Theme }) {
         style={{
           background: p.card,
           border: `1px solid ${p.border}`,
-          borderRadius: themeId === "threed" ? 10 : 4,
-          boxShadow: themeId === "threed" ? "0 4px 10px rgba(26,34,51,0.12)" : "none",
+          borderRadius: rounded ? 10 : 4,
+          boxShadow: rounded ? "0 4px 10px rgba(26,34,51,0.12)" : "none",
           padding: "6px 8px",
           display: "flex",
           flexDirection: "column",
@@ -41,8 +48,8 @@ function ThemePreview({ themeId }: { themeId: Theme }) {
         <div style={{ height: 4, width: "65%", background: p.ink, opacity: 0.3, borderRadius: 2 }} />
       </div>
       <div style={{ display: "flex", gap: 4, marginTop: "auto" }}>
-        <div style={{ height: 12, width: 34, background: p.accent, borderRadius: themeId === "threed" ? 6 : 2 }} />
-        <div style={{ height: 12, width: 34, background: "transparent", border: `1px solid ${p.border}`, borderRadius: themeId === "threed" ? 6 : 2 }} />
+        <div style={{ height: 12, width: 34, background: p.accent, borderRadius: rounded ? 6 : 2 }} />
+        <div style={{ height: 12, width: 34, background: "transparent", border: `1px solid ${p.border}`, borderRadius: rounded ? 6 : 2 }} />
       </div>
     </div>
   );

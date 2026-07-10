@@ -87,6 +87,11 @@ export interface AppSettings {
   webhookSecret: string;
   telegramNotifyChatId: string;
   discordNotifyChannelId: string;
+  // Automatikus adatmentés
+  backupIntervalHours: string;
+  backupKeepLast: string;
+  // Napi hozzáadási limit userenként (0 = korlátlan); admin kivétel
+  userDailyAddQuota: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -129,6 +134,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   webhookSecret: "",
   telegramNotifyChatId: "",
   discordNotifyChannelId: "",
+  backupIntervalHours: "24",
+  backupKeepLast: "14",
+  userDailyAddQuota: "0",
 };
 
 export const SETTINGS_KEY = "mediachat-settings";

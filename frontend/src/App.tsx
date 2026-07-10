@@ -11,6 +11,8 @@ import StoragePage from "./pages/StoragePage";
 import JobsPage from "./pages/JobsPage";
 import CalendarPage from "./pages/CalendarPage";
 import SetupPage from "./pages/SetupPage";
+import ProfilePage from "./pages/ProfilePage";
+import AuditPage from "./pages/AuditPage";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { getAuth } from "./utils/auth";
 
@@ -35,9 +37,11 @@ export default function App() {
         <Route path="/chat" element={<RequireAuth><ChatPage /></RequireAuth>} />
         <Route path="/recommendations" element={<RequireAuth><RecommendationsPage /></RequireAuth>} />
         <Route path="/calendar" element={<RequireAuth><CalendarPage /></RequireAuth>} />
+        <Route path="/profile" element={<RequireAuth><ProfilePage /></RequireAuth>} />
         <Route path="/dashboard" element={<RequireAdmin><DashboardPage /></RequireAdmin>} />
         <Route path="/storage" element={<RequireAdmin><StoragePage /></RequireAdmin>} />
         <Route path="/jobs" element={<RequireAdmin><JobsPage /></RequireAdmin>} />
+        <Route path="/audit" element={<RequireAdmin><AuditPage /></RequireAdmin>} />
         <Route path="/settings" element={<RequireAdmin><SettingsPage /></RequireAdmin>} />
         <Route path="/settings/notifications" element={<RequireAdmin><SettingsPage /></RequireAdmin>} />
         <Route path="/settings/backup" element={<RequireAdmin><SettingsPage /></RequireAdmin>} />
