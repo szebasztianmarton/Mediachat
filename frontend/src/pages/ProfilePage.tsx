@@ -33,6 +33,13 @@ export default function ProfilePage() {
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [revoking, setRevoking] = useState<string | null>(null);
 
+  // TOTP második faktor
+  const [totpEnabled, setTotpEnabled] = useState<boolean | null>(null);
+  const [totpSetup, setTotpSetup] = useState<{ secret: string; otpauth_uri: string } | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [totpBusy, setTotpBusy] = useState(false);
+  const [totpDisabling, setTotpDisabling] = useState(false);
+
   const loadPasskeys = useCallback(async () => {
     setLoading(true);
     try {
@@ -59,6 +66,65 @@ export default function ProfilePage() {
 
   useEffect(() => { loadPasskeys(); }, [loadPasskeys]);
   useEffect(() => { loadSessions(); }, [loadSessions]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<{ totp_enabled?: boolean }>("/api/auth/me")
+      .then((me) => { if (!cancelled) setTotpEnabled(!!me.totp_enabled); })
+      .catch(() => { if (!cancelled) setTotpEnabled(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function beginTotpSetup() {
+    setTotpBusy(true);
+    try {
+      const data = await api<{ secret: string; otpauth_uri: string }>(
+        "/api/auth/totp/setup/begin", { method: "POST" }
+      );
+      setTotpSetup(data);
+      setTotpCode("");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "A TOTP beállítás indítása nem sikerült.");
+    } finally {
+      setTotpBusy(false);
+    }
+  }
+
+  async function finishTotpSetup() {
+    setTotpBusy(true);
+    try {
+      await api("/api/auth/totp/setup/finish", {
+        method: "POST",
+        body: JSON.stringify({ code: totpCode }),
+      });
+      toast.success("TOTP bekapcsolva — mostantól a belépéshez kód is kell.");
+      setTotpEnabled(true);
+      setTotpSetup(null);
+      setTotpCode("");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "A kód ellenőrzése nem sikerült.");
+    } finally {
+      setTotpBusy(false);
+    }
+  }
+
+  async function disableTotp() {
+    setTotpBusy(true);
+    try {
+      await api("/api/auth/totp/disable", {
+        method: "POST",
+        body: JSON.stringify({ code: totpCode }),
+      });
+      toast.success("TOTP kikapcsolva.");
+      setTotpEnabled(false);
+      setTotpDisabling(false);
+      setTotpCode("");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "A kikapcsolás nem sikerült.");
+    } finally {
+      setTotpBusy(false);
+    }
+  }
 
   async function revokeSession(id: string) {
     setRevoking(id);
@@ -176,6 +242,111 @@ export default function ProfilePage() {
                   )}
                 </div>
               ))
+            )}
+          </div>
+
+          <div className="card overflow-hidden mb-4">
+            <div className="card-header">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-900" style={{ letterSpacing: "-0.01em" }}>
+                  Kétlépcsős azonosítás (TOTP)
+                </h2>
+                <p className="text-xs text-gray-500 mt-1" style={{ lineHeight: 1.6, maxWidth: 460 }}>
+                  Jelszavas belépéskor a hitelesítő appod (pl. Google Authenticator, Aegis) 6 számjegyű
+                  kódját is kérni fogjuk. A passkey-belépést nem érinti.
+                </p>
+              </div>
+              {totpEnabled === false && !totpSetup && (
+                <button onClick={beginTotpSetup} disabled={totpBusy} className="btn btn-primary btn-sm shrink-0">
+                  Bekapcsolás
+                </button>
+              )}
+              {totpEnabled === true && !totpDisabling && (
+                <span className="badge badge-green shrink-0">Bekapcsolva</span>
+              )}
+            </div>
+
+            {totpEnabled === null && (
+              <div style={{ padding: "20px" }}>
+                <p className="text-sm text-gray-400">Betöltés...</p>
+              </div>
+            )}
+
+            {totpSetup && (
+              <div style={{ padding: "14px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+                <p className="text-xs text-gray-600" style={{ lineHeight: 1.6 }}>
+                  1. Add hozzá ezt a titkot a hitelesítő appodhoz (kézi bevitel vagy otpauth-link):
+                </p>
+                <code
+                  className="text-sm wrap-break-word"
+                  style={{ fontFamily: "monospace", background: "var(--surface-2)", padding: "8px 10px", borderRadius: "var(--radius-sm)", letterSpacing: "0.08em" }}
+                >
+                  {totpSetup.secret}
+                </code>
+                <code
+                  className="text-xs text-gray-500 wrap-break-word"
+                  style={{ fontFamily: "monospace", background: "var(--surface-2)", padding: "6px 10px", borderRadius: "var(--radius-sm)" }}
+                >
+                  {totpSetup.otpauth_uri}
+                </code>
+                <p className="text-xs text-gray-600" style={{ lineHeight: 1.6 }}>
+                  2. Írd be az app által mutatott 6 számjegyű kódot a megerősítéshez:
+                </p>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    className="input"
+                    style={{ width: 140, fontFamily: "monospace", letterSpacing: "0.3em", textAlign: "center" }}
+                    placeholder="123456"
+                    value={totpCode}
+                    onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    aria-label="TOTP megerősítő kód"
+                  />
+                  <button onClick={finishTotpSetup} disabled={totpBusy || totpCode.length !== 6} className="btn btn-primary btn-sm">
+                    {totpBusy ? "Ellenőrzés..." : "Megerősítés"}
+                  </button>
+                  <button onClick={() => { setTotpSetup(null); setTotpCode(""); }} className="btn btn-ghost btn-sm">
+                    Mégse
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {totpEnabled === true && (
+              <div style={{ padding: "14px 20px" }}>
+                {!totpDisabling ? (
+                  <button onClick={() => { setTotpDisabling(true); setTotpCode(""); }} className="btn btn-secondary btn-sm">
+                    Kikapcsolás
+                  </button>
+                ) : (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <span className="text-xs text-gray-600">A kikapcsoláshoz add meg az aktuális kódot:</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      className="input"
+                      style={{ width: 140, fontFamily: "monospace", letterSpacing: "0.3em", textAlign: "center" }}
+                      placeholder="123456"
+                      value={totpCode}
+                      onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      aria-label="TOTP kód a kikapcsoláshoz"
+                    />
+                    <button onClick={disableTotp} disabled={totpBusy || totpCode.length !== 6} className="btn btn-danger btn-sm">
+                      {totpBusy ? "..." : "Kikapcsolás"}
+                    </button>
+                    <button onClick={() => { setTotpDisabling(false); setTotpCode(""); }} className="btn btn-ghost btn-sm">
+                      Mégse
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {totpEnabled === false && !totpSetup && (
+              <div style={{ padding: "14px 20px" }}>
+                <p className="text-sm text-gray-400">Nincs bekapcsolva.</p>
+              </div>
             )}
           </div>
 

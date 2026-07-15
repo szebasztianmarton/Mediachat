@@ -92,6 +92,9 @@ class QueueService:
         job = await self.get_job(db, job_id)
         if job is None:
             return None
+        if job.status != "failed":
+            # Futó vagy már sikeres jobot nem teszünk vissza — dupla hozzáadás lenne.
+            return job
         job.status = "queued"
         job.message = ""
         job.finished_at = None

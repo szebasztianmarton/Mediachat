@@ -1,218 +1,281 @@
 # Media Assistant Chatbot
 
 ![Stack](https://img.shields.io/badge/Stack-FastAPI%20%7C%20Ollama%20%7C%20Vite-0f172a?style=flat-square)
-![Media](https://img.shields.io/badge/Media-Sonarr%20%7C%20Radarr-7c3aed?style=flat-square)
+![Media](https://img.shields.io/badge/Media-Sonarr%20%7C%20Radarr%20%7C%20Jellyfin-7c3aed?style=flat-square)
 ![AI](https://img.shields.io/badge/AI-Local%20LLM-16a34a?style=flat-square)
 
-Természetes nyelvű chatbot, amely film- és sorozatkéréseket fogad, cím vagy körülírás
-alapján keres (TMDb + lokális LLM), majd jóváhagyás után automatikusan hozzáadja a
-tartalmat **Radarrhoz** (film) vagy **Sonarrhoz** (sorozat). Sorozatoknál legfeljebb
-**1080p** minőség engedélyezett.
+A natural-language chatbot for your home media stack. It takes movie and TV requests,
+searches by **title or free-text description** (TMDb + a local LLM), and after your
+confirmation automatically adds the content to **Radarr** (movies) or **Sonarr**
+(series). Series are capped at **1080p** by default. On top of the assistant it ships a
+full admin dashboard: live "Now Playing" sessions, per-user watch analytics, storage
+management, recommendations, backups, torrent cleanup, and more.
 
-A részletes tervezési dokumentáció: [Media Assistant Chatbot.md](./Media%20Assistant%20Chatbot.md).
-
----
-
-## Funkciók
-
-- **Cím alapú keresés** – a bot eldönti, film vagy sorozat, és megkeresi.
-- **Leírás alapú keresés** – az LLM kulcsszavakat nyer ki, a TMDb-ben keres.
-- **Automatikus hozzáadás** – Radarr / Sonarr API-n keresztül, 1080p korláttal, háttér-jobbal.
-- **Valódi autentikáció** – hash-elt jelszavak, session tokenek, admin/user szerepkörök.
-- **Ajánlórendszer** – `watched`, `liked`, `continue` katalógusok + like/dislike visszajelzés.
-- **Tárhelymenedzsment** – állapot, cache takarítás, elavult tartalom kezelése (delete/unmonitor).
-- **Botok** – opcionális Telegram és Discord integráció.
-- **Webes felület** – reMarkable e-ink stílusú React UI (chat, dashboard, ajánlások, tárhely, felhasználók, tanítás, naplók).
+Detailed design notes (Hungarian): [Media Assistant Chatbot.md](./Media%20Assistant%20Chatbot.md).
 
 ---
 
-## Architektúra
+## Features
+
+### Assistant
+- **Title search** – the bot decides movie vs. series and looks it up.
+- **Description search** – the LLM extracts keywords and searches TMDb.
+- **Automatic add** – via the Radarr / Sonarr API, with the 1080p cap and a background job queue.
+- **Chat agent** – a single conversational endpoint that detects intent (search / add / chat) and streams LLM replies over SSE.
+
+### Accounts & security
+- **Real authentication** – PBKDF2-hashed passwords, hashed session tokens, admin/user roles.
+- **Two-factor (TOTP)** – optional authenticator-app 2FA (dependency-free, RFC 6238), with a two-step login.
+- **Passkeys (WebAuthn)** – optional passwordless login alongside the password.
+- **Rate limiting** – brute-force and LLM-abuse protection on login and chat.
+
+### Media & library
+- **Recommendations** – `watched`, `liked`, and `continue` catalogs with like/dislike feedback. The `continue` catalog is fed by real Jellyfin resume progress.
+- **Now Playing** – live Plex/Jellyfin sessions with per-stream detail: transcode vs. direct, device/client, local vs. remote, audio/subtitle track, resolution, and a server-load summary.
+- **Jellyfin watch analytics** – per-user watch time, in-progress items, and recently watched.
+- **Storage management** – disk status, cache cleanup, and stale-content detection (Jellyfin-watch-aware) with delete/unmonitor actions.
+- **Calendar** – upcoming releases from Sonarr/Radarr.
+- **Backups** – scheduled and manual JSON backups with a restore preview.
+- **Torrents** – qBittorrent / Transmission listing and automatic cleanup of finished downloads.
+
+### Integrations & UI
+- **Webhooks** – Sonarr/Radarr "download imported" events → Telegram/Discord notifications.
+- **Bots** – optional Telegram and Discord integration.
+- **Audit log** – who added/liked/dropped what, plus automatic torrent deletions.
+- **Web UI** – reMarkable e-ink–inspired React interface with multiple themes, **i18n (Hungarian / English)**, and PWA support (chat, dashboard, recommendations, storage, users, training, logs).
+
+---
+
+## Architecture
 
 ```
-frontend (Vite PWA, :3000)
-        │  REST
+frontend (Vite PWA / nginx, :3000)
+        │  REST + SSE
         ▼
-backend (FastAPI, :8000) ──► Sonarr / Radarr API
+backend (FastAPI, :8000) ──► Sonarr / Radarr / Jellyfin / Plex APIs
    │        │        │
    ▼        ▼        ▼
 PostgreSQL  Redis    Ollama (:11434)  ──► TMDb API
+(or SQLite) (cache)  (local LLM)
 ```
 
-A backend forrása: [backend/app/](./backend/app/) – `services/` (keresés, ranking,
-ajánlás, tárhely, sonarr/radarr/tmdb/ollama kliensek), `bots/`, `db/`.
+Backend source: [backend/app/](./backend/app/) — `services/` (search, ranking,
+recommendations, storage, backups, media sessions, Jellyfin, TOTP/WebAuthn, and the
+Sonarr/Radarr/TMDb/Ollama clients), `bots/`, `db/`.
+
+Frontend source: [frontend/src/](./frontend/src/) — `pages/`, `components/`, `hooks/`,
+`utils/`, and `i18n/` (the translation layer).
 
 ---
 
-## Gyors indulás (pnpm)
+## Quick start (pnpm)
 
-Az ajánlott fejlesztői út: a backend és a frontend **egyetlen paranccsal, egyszerre**
-indul a gyökérben lévő pnpm szkripttel.
+The recommended dev workflow starts the backend and the frontend **together with a
+single command** from the repo root.
 
-### Előfeltételek
-
+### Prerequisites
 - Node.js + **pnpm**
 - Python 3.11+
-- Elérhető **Sonarr** és **Radarr** példány (API kulccsal)
-- Opcionálisan **TMDb** API kulcs (leírás alapú kereséshez)
+- A reachable **Sonarr** and **Radarr** instance (with API keys)
+- Optionally a **TMDb** API key (for description search) and **Ollama** (for the LLM)
 
-### 1. Konfiguráció
+### 1. Configuration
 
 ```bash
 cp .env.example .env
 ```
 
-Töltsd ki az `.env` fájlt – a legfontosabb mezők:
+Fill in `.env` — the most important fields:
 
-| Változó | Leírás |
+| Variable | Description |
 | --- | --- |
-| `SONARR_URL`, `SONARR_API_KEY` | Sonarr elérés |
-| `RADARR_URL`, `RADARR_API_KEY` | Radarr elérés |
-| `OLLAMA_MODEL` | használt LLM modell (alap: `llama3.2:3b`) |
-| `TMDB_API_KEY` | TMDb metaadat kulcs |
-| `MAX_SERIES_QUALITY` | sorozat minőségkorlát (alap: `1080p`) |
-| `REDIS_ENABLED` | Redis ki/be (lokálisan `false` is lehet) |
-| `TELEGRAM_ENABLED` / `DISCORD_ENABLED` | botok be-/kikapcsolása |
+| `SONARR_URL`, `SONARR_API_KEY` | Sonarr access |
+| `RADARR_URL`, `RADARR_API_KEY` | Radarr access |
+| `OLLAMA_MODEL` | LLM model in use (default: `llama3.2:3b`) |
+| `TMDB_API_KEY` | TMDb metadata key |
+| `MAX_SERIES_QUALITY` | series quality cap (default: `1080p`) |
+| `REDIS_ENABLED` | Redis on/off (can be `false` locally) |
+| `JELLYFIN_URL`, `JELLYFIN_API_KEY` | Jellyfin (sessions, analytics, provisioning) |
+| `PLEX_URL`, `PLEX_TOKEN` | Plex (Now Playing sessions) |
+| `TELEGRAM_ENABLED` / `DISCORD_ENABLED` | bots on/off |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | first-run admin account |
 
-> Konfiguráció nélkül a backend SQLite-ra esik vissza
-> (`sqlite+aiosqlite:///./data/media_bot.db`), így Postgres nélkül is indítható.
-> Soha ne commitold az éles API kulcsokat – a `.env` a `.gitignore`-ban van.
+> Without a database URL the backend falls back to SQLite
+> (`sqlite+aiosqlite:///./data/media_bot.db`), so it runs without Postgres.
+> Never commit real API keys — `.env` is in `.gitignore`.
 
-### 2. Telepítés (egyszeri)
+### 2. Install (one-time)
 
 ```bash
 pnpm setup
-# = pnpm install (frontend függőségek) + pip install -r backend/requirements.txt
+# = pnpm install (frontend deps) + pip install -r backend/requirements.txt
 ```
 
-### 3. Ollama modell letöltése
+### 3. Pull the Ollama model
 
 ```bash
 ollama pull llama3.2:3b
 ```
 
-### 4. Indítás egy paranccsal
+### 4. Start with one command
 
 ```bash
 pnpm dev
 ```
 
-Ez párhuzamosan elindítja:
+This starts, in parallel:
 
 - **backend** → http://localhost:8000 (`uvicorn --reload`)
 - **frontend** → http://localhost:3100 (`vite`)
 
-A logok címkézve (`backend` / `frontend`) jelennek meg ugyanabban a terminálban;
-`Ctrl+C` mindkettőt leállítja.
+Logs appear labelled (`backend` / `frontend`) in the same terminal; `Ctrl+C` stops both.
 
-### pnpm parancsok
+### pnpm scripts
 
-| Parancs | Leírás |
+| Command | Description |
 | --- | --- |
-| `pnpm dev` | backend + frontend egyszerre |
-| `pnpm dev:backend` | csak a FastAPI backend (`:8000`) |
-| `pnpm dev:frontend` | csak a Vite frontend (`:3000`) |
+| `pnpm dev` | backend + frontend together |
+| `pnpm dev:backend` | FastAPI backend only (`:8000`) |
+| `pnpm dev:frontend` | Vite frontend only (`:3100`) |
 | `pnpm build` | frontend production build |
-| `pnpm setup` | függőségek telepítése (frontend + backend) |
+| `pnpm setup` | install dependencies (frontend + backend) |
 
-> A `dev:backend` `python -m uvicorn`-t hív – ha virtuális környezetet használsz,
-> előbb aktiváld, hogy a megfelelő `python` legyen a PATH-on.
+> `dev:backend` calls `python -m uvicorn` — if you use a virtualenv, activate it first
+> so the right `python` is on the PATH.
 
 ---
 
-## Használat
+## Usage
 
-### Webes felület
+### Web UI
 
-Nyisd meg a http://localhost:3100 címet, és jelentkezz be (alapértelmezett:
-`admin / media2024` — az `ADMIN_USERNAME` / `ADMIN_PASSWORD` env-változóval
-módosítható; **éles használat előtt változtasd meg**). Írd be a kérést (pl.
-*„a 2010-es Eredet”* vagy *„űrhajós film ahol egyedül marad a Marson”*). A bot
-kártyákban listázza a találatokat – válassz, és nyomd meg a hozzáadás gombot.
+Open http://localhost:3100 and sign in (default: `admin / media2024` — override with
+`ADMIN_USERNAME` / `ADMIN_PASSWORD`; **change it before real use**). Type a request
+(e.g. *"Inception from 2010"* or *"a sci-fi where an astronaut is stranded on Mars"*).
+The bot lists results as cards — pick one and hit add. Switch the interface language
+(Hungarian / English) and theme from the sidebar; enable TOTP or a passkey from your
+profile.
 
 ### REST API
 
-A backend főbb végpontjai (teljes lista + Swagger: http://localhost:8000/docs):
+Main backend endpoints (full list + Swagger: http://localhost:8000/docs):
 
-| Metódus | Útvonal | Funkció | Jogosultság |
+| Method | Path | Purpose | Auth |
 | --- | --- | --- | --- |
-| `GET`  | `/health` | szolgáltatások állapota | nyilvános |
-| `POST` | `/api/auth/login` | bejelentkezés (token) | nyilvános |
-| `POST` | `/api/auth/logout` | session visszavonása | session |
-| `GET`  | `/api/auth/me` | aktuális felhasználó | session |
-| `GET/POST/DELETE` | `/api/users[...]` | felhasználókezelés | admin |
-| `POST` | `/api/search` | keresés (cím vagy leírás) | session |
-| `POST` | `/api/add` | tartalom hozzáadása Sonarr/Radarr-hoz | session |
-| `GET`  | `/api/jobs/{job_id}` | aszinkron hozzáadás állapota | session |
-| `GET`  | `/api/recommendations/{catalog}` | ajánlások (`watched`/`liked`/`continue`) | session |
-| `POST` | `/api/feedback` | like/dislike visszajelzés | session |
-| `POST` | `/api/chat/agent` | chat agent (keresés/hozzáadás/LLM) | session |
-| `GET`  | `/api/storage/status` | tárhely állapot | admin |
-| `POST` | `/api/storage/cleanup` | cache takarítás | admin |
-| `GET`  | `/api/storage/stale` | elavult tartalmak listája | admin |
-| `POST` | `/api/storage/stale/action` | elavult tartalom kezelése (delete/unmonitor) | admin |
-| `GET/PUT/DELETE` | `/api/training/files[...]` | LLM tanítófájlok | admin |
+| `GET`  | `/health` | service status | public |
+| `POST` | `/api/auth/login` | login (returns token, or a TOTP ticket) | public |
+| `POST` | `/api/auth/login/totp` | second step of TOTP login | public |
+| `POST` | `/api/auth/logout` | revoke session | session |
+| `GET`  | `/api/auth/me` | current user | session |
+| `POST` | `/api/auth/totp/setup/{begin,finish}` | enable TOTP | session |
+| `POST` | `/api/auth/webauthn/...` | passkey register / login | session / public |
+| `GET/POST/DELETE` | `/api/users[...]` | user management | admin |
+| `POST` | `/api/search` | search (title or description) | session |
+| `POST` | `/api/add` | add content to Sonarr/Radarr | session |
+| `GET`  | `/api/jobs/{job_id}` | async add status | session |
+| `GET`  | `/api/recommendations/{catalog}` | recommendations (`watched`/`liked`/`continue`) | session |
+| `POST` | `/api/feedback` | like/dislike feedback | session |
+| `POST` | `/api/chat/agent[/stream]` | chat agent (search/add/LLM, SSE) | session |
+| `GET`  | `/api/media/sessions` | live Now Playing sessions | session |
+| `GET`  | `/api/jellyfin/analytics` | per-user watch analytics | admin |
+| `GET`  | `/api/storage/status` | storage status | admin |
+| `POST` | `/api/storage/cleanup` | cache cleanup | admin |
+| `GET`  | `/api/storage/stale` | stale content list | admin |
+| `POST` | `/api/storage/stale/action` | manage stale content (delete/unmonitor) | admin |
+| `GET`  | `/api/backups` + restore | backup list / create / restore | admin |
+| `GET`  | `/api/audit` | audit log | admin |
+| `GET/PUT/DELETE` | `/api/training/files[...]` | LLM training files | admin |
 
-A védett végpontok az `X-Session-Token` fejlécben várják a tokent.
+Protected endpoints expect the token in the `X-Session-Token` header.
 
-#### Példa folyamat
+#### Example flow
 
 ```bash
-# 1. Bejelentkezés
+# 1. Login
 curl -X POST http://localhost:8000/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username": "admin", "password": "media2024"}'
 # → { "token": "abc...", "user": { "id": "...", "role": "admin", ... } }
+#   (for a TOTP-enabled account: { "totp_required": true, "ticket": "..." })
 
-# 2. Keresés
+# 2. Search
 curl -X POST http://localhost:8000/api/search \
   -H "Content-Type: application/json" \
   -H "X-Session-Token: <token>" \
-  -d '{"query": "Eredet", "mode": "auto"}'
+  -d '{"query": "Inception", "mode": "auto"}'
 
-# 3. Hozzáadás (a találatból kapott external_id / media_type alapján)
+# 3. Add (using external_id / media_type from a result)
 curl -X POST http://localhost:8000/api/add \
   -H "Content-Type: application/json" \
   -H "X-Session-Token: <token>" \
-  -d '{"media_type": "movie", "external_id": 27205, "title": "Eredet", "tmdb_id": 27205}'
+  -d '{"media_type": "movie", "external_id": 27205, "title": "Inception", "tmdb_id": 27205}'
 ```
 
-> A `mode` lehet `auto` (alapértelmezett), `title` vagy `description`.
+> `mode` can be `auto` (default), `title`, or `description`.
 
 ---
 
-## Alternatíva: Docker Compose
+## Internationalization (i18n)
 
-Ha konténerizált, „mindent egyben” telepítést szeretnél (PostgreSQL, Redis, Ollama,
-backend, frontend), használd a [docker-compose.yml](./docker-compose.yml)-t:
+The UI ships a **dependency-free** i18n layer in [frontend/src/i18n/](./frontend/src/i18n/)
+(no external library, matching the project's minimal-dependency approach). Hungarian is
+the default; English is bundled; the language is switchable from the sidebar and
+persisted in `localStorage`.
+
+Adding or translating a string:
+
+```tsx
+import { useT } from "../i18n";
+
+function MyComponent() {
+  const t = useT();
+  return <p>{t("nav.settings")}</p>;          // "Beállítások" / "Settings"
+  // with variables: t("analytics.daysAgo", { n: 3 })
+}
+```
+
+Add the key to **both** dictionaries (`hu` and `en`) in `src/i18n/index.tsx`. A missing
+key falls back to Hungarian, then to the raw key, so partial migration is safe — new
+screens can adopt `t()` incrementally without breaking existing ones.
+
+---
+
+## Alternative: Docker Compose
+
+For a containerized "all in one" setup (PostgreSQL, Redis, Ollama, backend, frontend),
+use [docker-compose.yml](./docker-compose.yml):
 
 ```bash
-cp .env.example .env          # töltsd ki
+cp .env.example .env          # fill it in
 docker compose up -d --build
 docker exec -it media-chatbot-ollama ollama pull llama3.2:3b
 ```
 
-Hasznos parancsok:
+Useful commands:
 
 ```bash
-docker compose ps               # konténerek állapota
-docker compose logs -f backend  # backend log
-docker compose down             # leállítás
+docker compose ps               # container status
+docker compose logs -f backend  # backend logs
+docker compose down             # stop
 ```
 
-> Dockerből egy hoston futó Sonarr/Radarr eléréséhez használd a
-> `http://host.docker.internal:8989` formát; a `SONARR_URL` ne tartalmazzon dupla
-> `http://`-t.
+> To reach a Sonarr/Radarr running on the host from inside Docker, use
+> `http://host.docker.internal:8989`; `SONARR_URL` must not contain a double `http://`.
+
+A TrueNAS SCALE build is available in [docker-compose.truenas.yml](./docker-compose.truenas.yml)
+(see [TRUENAS_DEPLOY.md](./TRUENAS_DEPLOY.md)).
 
 ---
 
-## Hibaelhárítás
+## Troubleshooting
 
-| Tünet | Megoldás |
+| Symptom | Fix |
 | --- | --- |
-| 401/403 a Sonarr/Radarr felé | ellenőrizd az API kulcsot és az URL-t az `.env`-ben |
-| `/health` → `degraded` | sem a Sonarr, sem a Radarr nem elérhető |
-| `pnpm dev:backend` hibázik | aktív venv? `python -m uvicorn` elérhető? |
-| Lassú / kiakadó LLM | válts kisebb, quantized modellre (`OLLAMA_MODEL`) |
-| Üres találat cím alapján | próbáld a leírás alapú keresést (`mode: description`) |
+| 401/403 towards Sonarr/Radarr | check the API key and URL in `.env` |
+| `/health` → `degraded` | neither Sonarr nor Radarr is reachable |
+| `pnpm dev:backend` fails | is the venv active? is `python -m uvicorn` available? |
+| Slow / hanging LLM | switch to a smaller, quantized model (`OLLAMA_MODEL`) |
+| Empty title search | try description search (`mode: description`) |
+| Blank page in dev after a code change | a stale service worker — hard-reload once (`Ctrl+Shift+R`); the SW only registers in production builds |
 
-További részletek és tervek: lásd a [tervezési dokumentumot](./Media%20Assistant%20Chatbot.md).
+More detail and roadmap: see the [design document](./Media%20Assistant%20Chatbot.md).

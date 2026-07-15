@@ -573,18 +573,7 @@ export default function ChatPage() {
                 tabIndex={0}
                 onClick={() => openConversation(c.id)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openConversation(c.id); } }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "7px 8px 7px 12px",
-                  cursor: "pointer",
-                  background: currentConvId === c.id ? "var(--surface-3)" : "transparent",
-                  borderRight: currentConvId === c.id ? "2px solid var(--ink)" : "2px solid transparent",
-                  transition: "none",
-                }}
-                onMouseEnter={(e) => { if (currentConvId !== c.id) e.currentTarget.style.background = "var(--surface-3)"; }}
-                onMouseLeave={(e) => { if (currentConvId !== c.id) e.currentTarget.style.background = "transparent"; }}
+                className={`conv-item${currentConvId === c.id ? " active" : ""}`}
               >
                 <p
                   className="text-xs truncate"

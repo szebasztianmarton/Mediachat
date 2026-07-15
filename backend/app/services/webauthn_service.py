@@ -86,6 +86,9 @@ class WebauthnService:
         except WebAuthnException as exc:
             raise WebauthnServiceError(f"Érvénytelen regisztrációs válasz: {exc}") from exc
 
+        # A challenge egyszer használatos — siker után azonnal érvénytelenítjük.
+        await self.cache.delete_prefix(self._reg_challenge_key(user.id))
+
         cred = WebauthnCredential(
             user_id=user.id,
             credential_id=bytes_to_base64url(verified.credential_id),
@@ -142,6 +145,11 @@ class WebauthnService:
             )
         except WebAuthnException as exc:
             raise WebauthnServiceError(f"Érvénytelen bejelentkezési válasz: {exc}") from exc
+
+        # A challenge egyszer használatos — a sign_count=0-t jelentő
+        # authenticátoroknál (pl. Windows Hello) enélkül a rögzített assertion
+        # a TTL-en belül visszajátszható lenne.
+        await self.cache.delete_prefix(self._auth_challenge_key(ceremony_id))
 
         stored_cred.sign_count = verified.new_sign_count
         user = (

@@ -225,25 +225,21 @@ function ServiceCard({
         <button
           type="button"
           onClick={() => setExpanded((p) => !p)}
+          className="text-ink-3 hover:text-ink cursor-pointer"
           style={{
             marginTop: "auto",
             padding: "7px 0",
             width: "100%",
             fontSize: 11,
-            color: "var(--ink-3)",
             background: "none",
             border: "none",
             borderTop: "1px solid var(--border-2)",
-            cursor: "pointer",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             gap: 6,
             fontFamily: "inherit",
-            transition: "none",
           }}
-          onMouseEnter={(e) => e.currentTarget.style.color = "var(--ink)"}
-          onMouseLeave={(e) => e.currentTarget.style.color = "var(--ink-3)"}
         >
           {expanded ? (
             <>

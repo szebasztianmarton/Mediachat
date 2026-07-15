@@ -17,11 +17,11 @@
   --surface-3: #E8E8E8;
   --ink: #000000;
   --ink-2: #555555;
-  --ink-3: #999999;
+  --ink-3: #6E6E6E;
   --border: #E0E0E0;
   --border-2: #EEEEEE;
   --border-strong: #B0B0B0;
-  --placeholder: #BBBBBB;
+  --placeholder: #8C8C8C;
 
   --primary-bg: #000000;
   --primary-ink: #FFFFFF;
@@ -54,11 +54,11 @@
   --surface-3: #2E2E2E;
   --ink: #F0F0F0;
   --ink-2: #B0B0B0;
-  --ink-3: #6E6E6E;
+  --ink-3: #949494;
   --border: #2E2E2E;
   --border-2: #262626;
   --border-strong: #4A4A4A;
-  --placeholder: #505050;
+  --placeholder: #6E6E6E;
 
   --primary-bg: #F0F0F0;
   --primary-ink: #141414;
@@ -86,11 +86,11 @@
   --surface-3: #E2E8F0;
   --ink: #1A2233;
   --ink-2: #51607A;
-  --ink-3: #8B97AC;
+  --ink-3: #5F6B80;
   --border: #E3E8F0;
   --border-2: #EDF1F7;
   --border-strong: #B9C4D6;
-  --placeholder: #A8B3C5;
+  --placeholder: #8A96AB;
 
   --primary-bg: #4F6BED;
   --primary-ink: #FFFFFF;
@@ -122,11 +122,11 @@
   --surface-3: #252A38;
   --ink: #EDEEF2;
   --ink-2: #A3A9B7;
-  --ink-3: #62687A;
+  --ink-3: #858CA2;
   --border: #262B38;
   --border-2: #1F2430;
   --border-strong: #3A4152;
-  --placeholder: #4A5164;
+  --placeholder: #666D80;
 
   --primary-bg: #6E7CFF;
   --primary-ink: #FFFFFF;
@@ -158,11 +158,11 @@
   --surface-3: #E6D8BC;
   --ink: #3B2F1E;
   --ink-2: #6B5A3E;
-  --ink-3: #9C8B6C;
+  --ink-3: #6E5F45;
   --border: #E0D2B0;
   --border-2: #EBE0C6;
   --border-strong: #C2AC7C;
-  --placeholder: #BFAE8A;
+  --placeholder: #998763;
 
   --primary-bg: #8A5A32;
   --primary-ink: #FBF6EA;
@@ -194,11 +194,11 @@
   --surface-3: rgba(255, 255, 255, 0.13);
   --ink: #EAF2FF;
   --ink-2: #9FB3D9;
-  --ink-3: #5C6B8A;
+  --ink-3: #858FA8;
   --border: rgba(255, 255, 255, 0.12);
   --border-2: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.26);
-  --placeholder: #445068;
+  --placeholder: #5E6A85;
 
   --primary-bg: #00E5C7;
   --primary-ink: #062019;
@@ -230,11 +230,11 @@
   --surface-3: #DCEAE0;
   --ink: #22322A;
   --ink-2: #52685B;
-  --ink-3: #8CA294;
+  --ink-3: #5E7266;
   --border: #DCE8E0;
   --border-2: #E8F0EA;
   --border-strong: #B7CCBE;
-  --placeholder: #A9BFB1;
+  --placeholder: #8A9E92;
 
   --primary-bg: #4F9A72;
   --primary-ink: #FFFFFF;
@@ -257,6 +257,38 @@
   --shadow-card: 0 1px 2px rgba(34, 50, 42, 0.04), 0 6px 18px rgba(34, 50, 42, 0.07);
   --shadow-pop: 0 16px 40px rgba(34, 50, 42, 0.16);
   --speed: 0.15s;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   A szemantikus tokenek Tailwind-utility-ként. Az `inline` kulcsszó miatt a
+   generált utility `var(--surface)`-öt ad ki (nem a feloldott értéket), így
+   `bg-surface` / `text-ink-3` / `border-border-strong` FUTÁSIDŐBEN reagál a
+   [data-theme] váltásra — így az inline `style={{ color: "var(--x)" }}`-ek
+   fokozatosan kiválthatók, és a hover/focus CSS-ben (nem JS-ben) fejezhető ki.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-placeholder: var(--placeholder);
+
+  --color-border: var(--border);
+  --color-border-2: var(--border-2);
+  --color-border-strong: var(--border-strong);
+
+  --color-primary: var(--primary-bg);
+  --color-primary-ink: var(--primary-ink);
+
+  --color-ok: var(--ok);
+  --color-err: var(--err);
+  --color-warn: var(--warn);
+
+  --font-display: var(--font-display);
 }
 
 @layer base {
@@ -457,6 +489,76 @@
   .dot-red   { background: var(--err); }
   .dot-amber { background: var(--warn); animation: rm-pulse 1.5s ease-in-out infinite; }
   @keyframes rm-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  /* A ChatPage inline `animation:`-jei ezekre hivatkoznak. A Tailwind v4 csak
+     az `animate-*` osztályhoz emitál keyframe-et, a nyers inline hivatkozáshoz
+     nem — ezért itt explicit definiáljuk, különben a pöttyök nem mozognak. */
+  @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+
+  /* ── Sidebar akciógombok (téma/kilépés) — a hover CSS-ben, nem JS-ben ── */
+  .sidebar-action {
+    flex: 1;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--ink-3);
+    cursor: pointer;
+    transition: background var(--speed), color var(--speed);
+  }
+  .sidebar-action:hover,
+  .sidebar-action[aria-expanded="true"] {
+    background: var(--primary-bg);
+    color: var(--primary-ink);
+  }
+
+  /* ── Kártya hover-emelés (QuickAction, kattintható kártyák) ── */
+  .card-hover { transition: border-color var(--speed), box-shadow var(--speed); }
+  .card-hover:hover { border-color: var(--border-strong); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
+
+  /* ── Kiválasztható lista-sor (Training fájllista) — hover/aktív CSS-ben ── */
+  .select-row {
+    cursor: pointer;
+    background: transparent;
+    border-right: 2px solid transparent;
+    transition: background var(--speed);
+  }
+  .select-row:hover { background: var(--surface-3); }
+  .select-row.active { background: var(--surface-3); border-right-color: var(--ink); }
+
+  /* Mobil bezáró (X) gomb a sidebar fejlécében — display-t a .mobile-only adja */
+  .sidebar-close {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--ink-3);
+    cursor: pointer;
+    transition: background var(--speed), color var(--speed);
+  }
+  .sidebar-close:hover { background: var(--primary-bg); color: var(--primary-ink); }
+
+  /* ── Chat beszélgetés-lista sor — a hover CSS-ben, nem JS-ben ── */
+  .conv-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 8px 7px 12px;
+    cursor: pointer;
+    background: transparent;
+    border-right: 2px solid transparent;
+    transition: background var(--speed);
+  }
+  .conv-item:hover { background: var(--surface-3); }
+  .conv-item.active { background: var(--surface-3); border-right-color: var(--ink); }
 
   /* ── Sidebar nav ── */
   .nav-item {
@@ -692,9 +794,157 @@
     cursor: pointer;
   }
 
+  /* ══ Adaptív dashboard — widget-rács + szerkesztő mód ══ */
+  .dash-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    align-items: start;
+  }
+  .dash-widget--full { grid-column: span 2; }
+  .dash-widget--half { grid-column: span 1; }
+  @media (max-width: 767px) {
+    .dash-grid { grid-template-columns: 1fr; }
+    .dash-widget--full, .dash-widget--half { grid-column: span 1; }
+  }
+
+  .dash-widget { position: relative; min-width: 0; }
+  .dash-widget--editing {
+    outline: 1.5px dashed var(--border-strong);
+    outline-offset: 5px;
+    border-radius: var(--radius);
+  }
+  .dash-widget--dragging { opacity: 0.4; }
+  .dash-widget--dragover { outline: 1.5px solid var(--primary-bg); outline-offset: 5px; }
+  /* Szerkesztéskor a widget tartalma nem kattintható — csak az eszköztár */
+  .dash-widget__content--editing { pointer-events: none; user-select: none; }
+
+  .dash-toolbar {
+    position: absolute;
+    top: -13px;
+    right: 8px;
+    z-index: 5;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-pop);
+  }
+  .dash-toolbar button {
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--ink-3);
+    cursor: pointer;
+    transition: background var(--speed), color var(--speed);
+  }
+  .dash-toolbar button:hover:not(:disabled) { background: var(--surface-3); color: var(--ink); }
+  .dash-toolbar button:disabled { opacity: 0.3; cursor: not-allowed; }
+  .dash-toolbar .dash-remove:hover { background: var(--err); color: #fff; }
+  .dash-drag-handle { cursor: grab; }
+  .dash-drag-handle:active { cursor: grabbing; }
+
+  .dash-add-tile {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 60px;
+    border: 1.5px dashed var(--border-strong);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--ink-3);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: color var(--speed), border-color var(--speed), background var(--speed);
+  }
+  .dash-add-tile:hover { color: var(--ink); border-color: var(--ink-3); background: var(--surface-2); }
+
+  .dash-empty {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--ink-3);
+    border: 1.5px dashed var(--border);
+    border-radius: var(--radius);
+  }
+
+  /* ══ Összecsukható + szűrhető lista-kártya (CollapsibleCard) ══ */
+  .collapse-btn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--ink-3);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background var(--speed), color var(--speed);
+  }
+  .collapse-btn:hover { background: var(--surface-3); color: var(--ink); }
+  .collapse-chevron { transition: transform 0.15s ease; }
+  .collapse-chevron--collapsed { transform: rotate(-90deg); }
+
+  .list-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border-2);
+    background: var(--surface-2);
+  }
+  .list-search {
+    position: relative;
+    flex: 1;
+    min-width: 150px;
+    display: flex;
+    align-items: center;
+  }
+  .list-search input { padding-left: 30px; height: 30px; }
+  .list-search .list-search__icon {
+    position: absolute;
+    left: 9px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--ink-3);
+    pointer-events: none;
+  }
+
+  .chip {
+    height: 26px;
+    padding: 0 11px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    border-radius: 999px;
+    border: 1px solid var(--border-strong);
+    background: transparent;
+    color: var(--ink-3);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background var(--speed), color var(--speed), border-color var(--speed);
+  }
+  .chip:hover { color: var(--ink); }
+  .chip--active { background: var(--primary-bg); color: var(--primary-ink); border-color: var(--primary-bg); }
+
   @media (prefers-reduced-motion: reduce) {
     .skeleton { animation: none; }
     .dot-amber { animation: none; }
+    /* A chat gépel-pöttyök és a status-pötje inline animáció-ját is leállítjuk */
+    [style*="dot-pulse"], [style*="bounce"] { animation: none !important; }
     * { transition: none !important; }
     .app-sidebar { transition: none !important; }
   }

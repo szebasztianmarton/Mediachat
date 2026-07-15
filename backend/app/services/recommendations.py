@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import MediaEvent
 from app.models import RecommendationItem
+from app.services.jellyfin import JellyfinClient
 from app.services.radarr import RadarrClient
 from app.services.search import SearchService
 from app.services.sonarr import SonarrClient
@@ -41,8 +42,42 @@ class RecommendationService:
 
     async def _continue_catalog(self, limit: int) -> list[RecommendationItem]:
         items: list[RecommendationItem] = []
+        seen: set[tuple[str, int]] = set()
+
+        # 1) Jellyfin: TÉNYLEGESEN félbehagyott (resume) tartalmak — a valódi
+        #    "hol tartok" jelzés, filmre és sorozatra egyaránt.
+        jellyfin = JellyfinClient()
+        if jellyfin.configured:
+            try:
+                resume = await jellyfin.continue_watching()
+            except Exception:  # noqa: BLE001
+                resume = []
+            for entry in resume:
+                ext = int(entry.get("external_id") or 0)
+                media_type = entry["media_type"]
+                if ext and (media_type, ext) in seen:
+                    continue
+                if ext:
+                    seen.add((media_type, ext))
+                percent = entry.get("percent") or 0
+                items.append(
+                    RecommendationItem(
+                        title=entry.get("title") or "?",
+                        year=entry.get("year"),
+                        overview=f"{percent}%-nál tartasz.",
+                        poster_url=None,
+                        media_type=media_type,
+                        external_id=ext,
+                        tmdb_id=entry.get("tmdb_id"),
+                        reason="Folytasd, ahol abbahagytad",
+                    )
+                )
+                if len(items) >= limit:
+                    return items[:limit]
+
+        # 2) Sonarr: hiányzó epizódú sorozatok (a meglévő logika).
         if not self.sonarr.configured:
-            return items
+            return items[:limit]
 
         series_list = await self.sonarr.list_series()
         for series in series_list:
@@ -50,6 +85,9 @@ class RecommendationService:
             episode_count = stats.get("episodeCount") or 0
             episode_file_count = stats.get("episodeFileCount") or 0
             if episode_count and episode_file_count < episode_count:
+                tvdb_id = series.get("tvdbId") or 0
+                if ("series", tvdb_id) in seen:
+                    continue  # már szerepel a Jellyfin resume-listában
                 remaining = episode_count - episode_file_count
                 items.append(
                     RecommendationItem(
@@ -58,10 +96,12 @@ class RecommendationService:
                         overview=f"{remaining} epizód még hátravan.",
                         poster_url=self._poster_from_arr(series),
                         media_type="series",
-                        external_id=series.get("tvdbId") or 0,
+                        external_id=tvdb_id,
                         reason="Félbehagyott sorozat",
                     )
                 )
+                if len(items) >= limit:
+                    break
 
         return items[:limit]
 
@@ -79,10 +119,16 @@ class RecommendationService:
         )
         seeds: list[dict[str, Any]] = []
         for event in result.scalars():
+            # Sorozatnál az external_id TVDB-azonosító — az NEM használható
+            # TMDB id-ként a similar-lekérdezéshez; tmdb_id nélkül kihagyjuk.
+            # Filmnél az external_id maga a TMDB id, így az jó fallback.
+            tmdb_id = event.tmdb_id or (event.external_id if event.media_type == "movie" else None)
+            if not tmdb_id:
+                continue
             seeds.append(
                 {
                     "media_type": event.media_type,
-                    "tmdb_id": event.tmdb_id or event.external_id,
+                    "tmdb_id": tmdb_id,
                     "title": event.title,
                 }
             )

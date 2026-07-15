@@ -54,7 +54,7 @@ export default function AppShell({ children }: Props) {
           bezáró (X) gombja veszi át a szerepét, lásd Sidebar.tsx onClose. */}
       {!mobileOpen && (
         <button
-          className="mobile-only"
+          className="mobile-only bg-surface text-ink border border-border cursor-pointer"
           aria-label="Menü megnyitása"
           aria-expanded={false}
           onClick={() => setMobileOpen(true)}
@@ -67,12 +67,8 @@ export default function AppShell({ children }: Props) {
             height: 40,
             alignItems: "center",
             justifyContent: "center",
-            background: "var(--surface)",
-            border: "1px solid var(--border)",
             borderRadius: "var(--radius-sm)",
             boxShadow: "var(--shadow-pop)",
-            cursor: "pointer",
-            color: "var(--ink)",
           }}
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">

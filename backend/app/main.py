@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import json
 import logging
 import re
@@ -6,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,12 +50,14 @@ from app.models import (
     TrainingFileContent,
     TrainingFileMeta,
     TrainingFilesResponse,
+    TotpCodeRequest,
+    TotpLoginRequest,
     TrainingSaveRequest,
     UserCreateRequest,
     UserInfo,
     UsersResponse,
 )
-from app.services import config_store
+from app.services import config_store, totp
 from app.services.backup import BackupService
 from app.services.cache import CacheService
 from app.services.history import HistoryService
@@ -204,6 +207,7 @@ def _user_info(user: User) -> UserInfo:
         display_name=user.display_name,
         role=user.role or "user",
         created_at=user.created_at.isoformat() if user.created_at else None,
+        totp_enabled=bool(user.totp_secret),
     )
 
 
@@ -298,10 +302,55 @@ async def login(
             detail="Túl sok bejelentkezési kísérlet. Próbáld újra kicsit később.",
             headers={"Retry-After": str(login_limiter.retry_after_seconds(ip))},
         )
-    auth = await st.session.authenticate(db, payload.username, payload.password)
-    if auth is None:
+    user = await st.session.verify_credentials(db, payload.username, payload.password)
+    if user is None:
         raise HTTPException(status_code=401, detail="Hibás felhasználónév vagy jelszó.")
-    user, _session, plaintext_token = auth
+    if user.totp_secret:
+        # Jelszó OK, de a fióknak TOTP második faktora van — token helyett
+        # rövid életű ticketet adunk, amit a /api/auth/login/totp vált be.
+        import secrets as _secrets
+
+        ticket = _secrets.token_urlsafe(24)
+        await st.cache.set_json(f"totp:login:{ticket}", {"user_id": user.id}, ttl=300)
+        return LoginResponse(totp_required=True, ticket=ticket)
+    _session, plaintext_token = await st.session.create_session_for_user(db, user)
+    return LoginResponse(token=plaintext_token, user=_user_info(user))
+
+
+@app.post("/api/auth/login/totp", response_model=LoginResponse)
+async def login_totp(
+    payload: TotpLoginRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> LoginResponse:
+    st = _state()
+    ip = _client_ip(request)
+    if not login_limiter.allow(ip):
+        raise HTTPException(
+            status_code=429,
+            detail="Túl sok bejelentkezési kísérlet. Próbáld újra kicsit később.",
+            headers={"Retry-After": str(login_limiter.retry_after_seconds(ip))},
+        )
+    stored = await st.cache.get_json(f"totp:login:{payload.ticket}")
+    if not stored:
+        raise HTTPException(status_code=401, detail="A bejelentkezés lejárt, kezdd újra.")
+    user = await st.session.get_user(db, stored["user_id"])
+    if user is None or not user.totp_secret:
+        raise HTTPException(status_code=401, detail="A bejelentkezés lejárt, kezdd újra.")
+    if not totp.verify_code(user.totp_secret, payload.code):
+        # Ticketenként legfeljebb 5 kód-próbálkozás — enélkül a TTL alatt
+        # (az IP-limiter tempójában) korlátlanul lehetne kódot találgatni.
+        attempts = int(stored.get("attempts") or 0) + 1
+        if attempts >= 5:
+            await st.cache.delete_prefix(f"totp:login:{payload.ticket}")
+            raise HTTPException(status_code=401, detail="A bejelentkezés lejárt, kezdd újra.")
+        await st.cache.set_json(
+            f"totp:login:{payload.ticket}", {**stored, "attempts": attempts}, ttl=300
+        )
+        raise HTTPException(status_code=401, detail="Érvénytelen kód. Próbáld újra.")
+    # A ticket egyszer használatos — siker után azonnal érvénytelenítjük.
+    await st.cache.delete_prefix(f"totp:login:{payload.ticket}")
+    _session, plaintext_token = await st.session.create_session_for_user(db, user)
     return LoginResponse(token=plaintext_token, user=_user_info(user))
 
 
@@ -334,9 +383,12 @@ async def webauthn_register_finish(
     credential = payload.get("credential")
     if not isinstance(credential, dict):
         raise HTTPException(status_code=422, detail="Hiányzó 'credential' mező.")
+    # A név nem-string (vagy túl hosszú) payloadnál ne 500-zal haljon el.
+    name = payload.get("name")
+    name = name.strip()[:120] if isinstance(name, str) and name.strip() else "Passkey"
     try:
         cred = await _state().webauthn.finish_registration(
-            db, session.user, credential, name=payload.get("name", "Passkey")
+            db, session.user, credential, name=name
         )
     except WebauthnServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -382,6 +434,61 @@ async def webauthn_login_finish(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     session, plaintext_token = await _state().session.create_session_for_user(db, user)
     return LoginResponse(token=plaintext_token, user=_user_info(user))
+
+
+# ── TOTP második faktor — opcionális, jelszó/passkey mellé ───────────────────
+
+
+@app.post("/api/auth/totp/setup/begin")
+async def totp_setup_begin(
+    session: UserSession = Depends(get_required_session),
+) -> dict:
+    if session.user.totp_secret:
+        raise HTTPException(status_code=400, detail="A TOTP már be van kapcsolva ezen a fiókon.")
+    secret = totp.generate_secret()
+    await _state().cache.set_json(f"totp:setup:{session.user_id}", {"secret": secret}, ttl=300)
+    return {
+        "secret": secret,
+        "otpauth_uri": totp.provisioning_uri(secret, session.user.username or session.user_id),
+    }
+
+
+@app.post("/api/auth/totp/setup/finish")
+async def totp_setup_finish(
+    payload: TotpCodeRequest,
+    session: UserSession = Depends(get_required_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, bool]:
+    st = _state()
+    stored = await st.cache.get_json(f"totp:setup:{session.user_id}")
+    if not stored:
+        raise HTTPException(status_code=400, detail="A beállítás lejárt, kezdd újra.")
+    if not totp.verify_code(stored["secret"], payload.code):
+        raise HTTPException(status_code=400, detail="Érvénytelen kód. Ellenőrizd az appot, és próbáld újra.")
+    user = await st.session.get_user(db, session.user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="A felhasználó nem található.")
+    user.totp_secret = stored["secret"]
+    await db.commit()
+    await st.cache.delete_prefix(f"totp:setup:{session.user_id}")
+    return {"success": True}
+
+
+@app.post("/api/auth/totp/disable")
+async def totp_disable(
+    payload: TotpCodeRequest,
+    session: UserSession = Depends(get_required_session),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, bool]:
+    user = await _state().session.get_user(db, session.user_id)
+    if user is None or not user.totp_secret:
+        raise HTTPException(status_code=400, detail="A TOTP nincs bekapcsolva ezen a fiókon.")
+    # Kikapcsoláshoz is érvényes kód kell — lopott session önmagában ne tudja levenni.
+    if not totp.verify_code(user.totp_secret, payload.code):
+        raise HTTPException(status_code=400, detail="Érvénytelen kód.")
+    user.totp_secret = None
+    await db.commit()
+    return {"success": True}
 
 
 @app.get("/api/auth/me", response_model=UserInfo)
@@ -862,7 +969,34 @@ async def media_sessions(_: UserSession = Depends(get_required_session)) -> dict
     if not st.media.configured:
         return {"sessions": [], "configured": False}
     sessions = await st.media.list_sessions()
-    return {"sessions": sessions, "configured": True}
+    return {"sessions": sessions, "configured": True, "summary": st.media.summarize(sessions)}
+
+
+@app.get("/api/media/image")
+async def media_image(
+    source: str,
+    path: str,
+    t: str,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Poszter/avatar proxy a Plex/Jellyfin szerverről — a token szerver-oldalon
+    marad. A session tokent query paraméterben kapjuk, mert az <img> tag nem tud
+    egyedi fejlécet küldeni. SSRF ellen csak relatív path engedélyezett."""
+    if "://" in path or path.startswith("//") or not path.startswith("/") or ".." in path:
+        raise HTTPException(status_code=400, detail="Érvénytelen kép útvonal.")
+    st = _state()
+    session = await st.session.get_session(db, t)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Érvénytelen munkamenet.")
+    result = await st.media.fetch_image(source, path)
+    if result is None:
+        raise HTTPException(status_code=404, detail="A kép nem érhető el.")
+    content, content_type = result
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 @app.get("/api/torrents")
@@ -968,7 +1102,7 @@ async def receive_webhook(secret: str, service: str, request: Request) -> dict:
     Ha a WEBHOOK_SECRET nincs beállítva, a végpont letiltva (404)."""
     if not settings.webhook_secret:
         raise HTTPException(status_code=404, detail="A webhook funkció nincs bekapcsolva.")
-    if secret != settings.webhook_secret:
+    if not hmac.compare_digest(secret, settings.webhook_secret):
         raise HTTPException(status_code=403, detail="Érvénytelen webhook titok.")
     st = _state()
 
@@ -1245,6 +1379,10 @@ async def restore_backup(filename: str, _: UserSession = Depends(get_admin_sessi
         result = await _state().backup.restore_backup(filename)
     except BackupRestoreError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # A visszaállított config-felülírásokkal a settings-ből épített kliensek
+    # (Sonarr/Radarr/TMDB/Ollama/Jellyfin) elavultak — újraépítjük őket, mint
+    # az update_config-ban.
+    _reload_service_clients(_state())
     # A user-tábla cseréje miatt a jelenlegi admin session (és minden más) is
     # törlődött a restore során — a kliensnek ki kell léptetnie a felhasználót.
     return {"restored": result, "logout_required": True}

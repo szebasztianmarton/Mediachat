@@ -4,9 +4,10 @@ import { api } from "../utils/api";
 import { clearAuth, getAuth } from "../utils/auth";
 import { getTheme, setTheme, THEMES } from "../utils/theme";
 import type { Theme } from "../utils/theme";
+import { useI18n, LANGUAGES } from "../i18n";
 
 interface NavItemDef {
-  label: string;
+  labelKey: string;
   href: string;
   icon: string;
   adminOnly?: boolean;
@@ -14,52 +15,52 @@ interface NavItemDef {
 
 const NAV_ITEMS: NavItemDef[] = [
   {
-    label: "Chat",
+    labelKey: "nav.chat",
     href: "/chat",
     icon: "M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z",
   },
   {
-    label: "Ajánlások",
+    labelKey: "nav.recommendations",
     href: "/recommendations",
     icon: "M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.563.563 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z",
   },
   {
-    label: "Naptár",
+    labelKey: "nav.calendar",
     href: "/calendar",
     icon: "M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5",
   },
   {
-    label: "Dashboard",
+    labelKey: "nav.dashboard",
     href: "/dashboard",
     icon: "M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z",
     adminOnly: true,
   },
   {
-    label: "Tárhely",
+    labelKey: "nav.storage",
     href: "/storage",
     icon: "M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4",
     adminOnly: true,
   },
   {
-    label: "Feladatok",
+    labelKey: "nav.jobs",
     href: "/jobs",
     icon: "M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25z",
     adminOnly: true,
   },
   {
-    label: "Naplók",
+    labelKey: "nav.logs",
     href: "/logs",
     icon: "M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z",
     adminOnly: true,
   },
   {
-    label: "Audit napló",
+    labelKey: "nav.audit",
     href: "/audit",
     icon: "M9 12h6m-6 3h6m-7.5 6h9a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0016.5 4.5h-1.875a1.125 1.125 0 01-1.125-1.125v-.375A1.125 1.125 0 0012.375 2h-1.5a1.125 1.125 0 00-1.125 1.125v.375A1.125 1.125 0 018.625 4.5H6.75A2.25 2.25 0 004.5 6.75v12.75A2.25 2.25 0 006.75 21z",
     adminOnly: true,
   },
   {
-    label: "Beállítások",
+    labelKey: "nav.settings",
     href: "/settings",
     icon: "M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z M15 12a3 3 0 11-6 0 3 3 0 016 0z",
     adminOnly: true,
@@ -78,11 +79,6 @@ const sidebarColors = {
   userSubText: "var(--ink-3)",
   avatarBg:    "var(--primary-bg)",
   avatarText:  "var(--primary-ink)",
-  actionBg:    "transparent",
-  actionBorder: "var(--border)",
-  actionColor: "var(--ink-3)",
-  actionHoverBg:    "var(--primary-bg)",
-  actionHoverColor: "var(--primary-ink)",
 };
 
 export const SIDEBAR_WIDTH = 240;
@@ -102,10 +98,12 @@ export default function Sidebar({
   onToggleCollapse?: () => void;
 }) {
   const navigate = useNavigate();
+  const { t, lang, setLang } = useI18n();
   const auth = getAuth();
   const isAdmin = auth?.role === "admin";
   const [theme, setThemeState] = useState<Theme>(getTheme);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const [langMenuOpen, setLangMenuOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -151,8 +149,8 @@ export default function Sidebar({
         <button
           type="button"
           className="sidebar-collapse-btn desktop-only"
-          title={collapsed ? "Menü kinyitása" : "Menü összecsukása"}
-          aria-label={collapsed ? "Menü kinyitása" : "Menü összecsukása"}
+          title={collapsed ? t("sidebar.expand") : t("sidebar.collapse")}
+          aria-label={collapsed ? t("sidebar.expand") : t("sidebar.collapse")}
           onClick={onToggleCollapse}
         >
           <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
@@ -217,29 +215,9 @@ export default function Sidebar({
         {!collapsed && onClose && (
           <button
             type="button"
-            className="mobile-only"
-            aria-label="Menü bezárása"
+            className="mobile-only sidebar-close"
+            aria-label={t("sidebar.close")}
             onClick={onClose}
-            style={{
-              width: 32,
-              height: 32,
-              flexShrink: 0,
-              alignItems: "center",
-              justifyContent: "center",
-              background: "transparent",
-              border: "none",
-              borderRadius: 6,
-              color: c.actionColor,
-              cursor: "pointer",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = c.actionHoverBg;
-              e.currentTarget.style.color = c.actionHoverColor;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-              e.currentTarget.style.color = c.actionColor;
-            }}
           >
             <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -255,7 +233,7 @@ export default function Sidebar({
             key={item.href}
             to={item.href}
             onClick={onNavigate}
-            title={collapsed ? item.label : undefined}
+            title={collapsed ? t(item.labelKey) : undefined}
             className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
           >
             <svg
@@ -270,7 +248,7 @@ export default function Sidebar({
             >
               <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
             </svg>
-            {!collapsed && item.label}
+            {!collapsed && t(item.labelKey)}
           </NavLink>
         ))}
       </nav>
@@ -289,7 +267,7 @@ export default function Sidebar({
             role="button"
             tabIndex={0}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") navigate("/profile"); }}
-            title={collapsed ? `${auth.username} (${auth.role === "admin" ? "Admin" : "Felhasználó"}) — Fiókom` : "Fiókom"}
+            title={collapsed ? `${auth.username} (${auth.role === "admin" ? t("role.admin") : t("role.user")}) — ${t("sidebar.account")}` : t("sidebar.account")}
             style={{
               display: "flex",
               alignItems: "center",
@@ -335,7 +313,7 @@ export default function Sidebar({
                   {auth.username}
                 </div>
                 <div style={{ fontSize: 11, color: c.userSubText, lineHeight: 1.3 }}>
-                  {auth.role === "admin" ? "Admin" : "Felhasználó"}
+                  {auth.role === "admin" ? t("role.admin") : t("role.user")}
                 </div>
               </div>
             )}
@@ -343,6 +321,50 @@ export default function Sidebar({
         )}
 
         <div style={{ display: "flex", flexDirection: collapsed ? "column" : "row", gap: 6, position: "relative" }}>
+          {/* Nyelvválasztó popover */}
+          {langMenuOpen && (
+            <div
+              style={{
+                position: "absolute",
+                bottom: collapsed ? 114 : 38,
+                left: 0,
+                width: 160,
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                boxShadow: "var(--shadow-pop)",
+                padding: 6,
+                zIndex: 60,
+              }}
+              role="menu"
+              aria-label={t("sidebar.language")}
+            >
+              {LANGUAGES.map((l) => (
+                <button
+                  key={l.code}
+                  role="menuitemradio"
+                  aria-checked={lang === l.code}
+                  onClick={() => { setLang(l.code); setLangMenuOpen(false); }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    width: "100%",
+                    padding: "7px 9px",
+                    border: "none",
+                    borderRadius: "var(--radius-sm)",
+                    background: lang === l.code ? "var(--surface-3)" : "transparent",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)" }}>{l.label}</span>
+                  {lang === l.code && <span style={{ fontSize: 12, color: "var(--ink)" }}>✓</span>}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Témaválasztó popover */}
           {themeMenuOpen && (
             <div
@@ -361,14 +383,14 @@ export default function Sidebar({
                 zIndex: 60,
               }}
               role="menu"
-              aria-label="Téma választása"
+              aria-label={t("sidebar.theme")}
             >
-              {THEMES.map((t) => (
+              {THEMES.map((themeOpt) => (
                 <button
-                  key={t.id}
+                  key={themeOpt.id}
                   role="menuitemradio"
-                  aria-checked={theme === t.id}
-                  onClick={() => chooseTheme(t.id)}
+                  aria-checked={theme === themeOpt.id}
+                  onClick={() => chooseTheme(themeOpt.id)}
                   style={{
                     display: "flex",
                     flexDirection: "column",
@@ -377,94 +399,60 @@ export default function Sidebar({
                     padding: "7px 9px",
                     border: "none",
                     borderRadius: "var(--radius-sm)",
-                    background: theme === t.id ? "var(--surface-3)" : "transparent",
+                    background: theme === themeOpt.id ? "var(--surface-3)" : "transparent",
                     cursor: "pointer",
                     textAlign: "left",
                     fontFamily: "inherit",
                   }}
                 >
                   <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)" }}>
-                    {t.label} {theme === t.id && "✓"}
+                    {themeOpt.label} {theme === themeOpt.id && "✓"}
                   </span>
-                  <span style={{ fontSize: 10.5, color: "var(--ink-3)", lineHeight: 1.3 }}>{t.description}</span>
+                  <span style={{ fontSize: 10.5, color: "var(--ink-3)", lineHeight: 1.3 }}>{themeOpt.description}</span>
                 </button>
               ))}
             </div>
           )}
 
-          <SidebarActionBtn
-            title="Téma választása"
-            onClick={() => setThemeMenuOpen((v) => !v)}
-            bg={themeMenuOpen ? c.actionHoverBg : c.actionBg}
-            border={c.actionBorder}
-            color={themeMenuOpen ? c.actionHoverColor : c.actionColor}
-            hoverBg={c.actionHoverBg}
-            hoverColor={c.actionHoverColor}
+          <button
+            type="button"
+            className="sidebar-action"
+            title={t("sidebar.language")}
+            aria-label={t("sidebar.language")}
+            aria-expanded={langMenuOpen}
+            onClick={() => { setLangMenuOpen((v) => !v); setThemeMenuOpen(false); }}
+          >
+            <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9 9 0 100-18 9 9 0 000 18zm0 0c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3M3.6 9h16.8M3.6 15h16.8" />
+            </svg>
+          </button>
+
+          <button
+            type="button"
+            className="sidebar-action"
+            title={t("sidebar.theme")}
+            aria-label={t("sidebar.theme")}
+            aria-expanded={themeMenuOpen}
+            onClick={() => { setThemeMenuOpen((v) => !v); setLangMenuOpen(false); }}
           >
             <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" d="M4.098 19.902a3.75 3.75 0 005.304 0l6.401-6.402M6.75 21A3.75 3.75 0 013 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 003.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.879 2.88M6.75 17.25h.008v.008H6.75v-.008z" />
             </svg>
-          </SidebarActionBtn>
+          </button>
 
-          <SidebarActionBtn
-            title="Kilépés"
+          <button
+            type="button"
+            className="sidebar-action"
+            title={t("sidebar.logout")}
+            aria-label={t("sidebar.logout")}
             onClick={handleLogout}
-            bg={c.actionBg}
-            border={c.actionBorder}
-            color={c.actionColor}
-            hoverBg={c.actionHoverBg}
-            hoverColor={c.actionHoverColor}
           >
             <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l3 3m0 0l-3 3m3-3H2.25" />
             </svg>
-          </SidebarActionBtn>
+          </button>
         </div>
       </div>
     </aside>
-  );
-}
-
-function SidebarActionBtn({
-  children, onClick, title, bg, border, color, hoverBg, hoverColor,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  title: string;
-  bg: string;
-  border: string;
-  color: string;
-  hoverBg: string;
-  hoverColor: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      style={{
-        flex: 1,
-        height: 30,
-        background: bg,
-        border: `1px solid ${border}`,
-        borderRadius: 5,
-        cursor: "pointer",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color,
-        transition: "none",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = hoverBg;
-        e.currentTarget.style.color = hoverColor;
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = bg;
-        e.currentTarget.style.color = color;
-      }}
-    >
-      {children}
-    </button>
   );
 }

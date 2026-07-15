@@ -16,6 +16,9 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [passkeyLoading, setPasskeyLoading] = useState(false);
   const passkeySupported = browserSupportsWebAuthn();
+  // TOTP második lépcső: jelszó után a szerver ticketet ad, és kódot vár.
+  const [totpTicket, setTotpTicket] = useState<string | null>(null);
+  const [totpCode, setTotpCode] = useState("");
 
   function afterLogin(data: { token: string; user: ApiUser }) {
     setAuth({
@@ -62,11 +65,22 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      const data = await api<{ token: string; user: ApiUser }>("/api/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ username, password }),
-      });
-      afterLogin(data);
+      const data = await api<{ token: string | null; user: ApiUser | null; totp_required?: boolean; ticket?: string }>(
+        "/api/auth/login",
+        {
+          method: "POST",
+          body: JSON.stringify({ username, password }),
+        }
+      );
+      if (data.totp_required && data.ticket) {
+        // Jelszó rendben — a fióknak TOTP második faktora van, kód kell.
+        setTotpTicket(data.ticket);
+        setTotpCode("");
+        return;
+      }
+      if (data.token && data.user) {
+        afterLogin({ token: data.token, user: data.user });
+      }
     } catch (err) {
       logger.warn("auth", `Sikertelen belépési kísérlet: ${username || "(üres)"}`);
       setError(
@@ -75,6 +89,38 @@ export default function LoginPage() {
           : "A szerver nem érhető el. Ellenőrizd, hogy a backend fut-e."
       );
       setPassword("");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleTotpSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!totpTicket) return;
+    setError("");
+    setLoading(true);
+    try {
+      const data = await api<{ token: string; user: ApiUser }>("/api/auth/login/totp", {
+        method: "POST",
+        body: JSON.stringify({ ticket: totpTicket, code: totpCode }),
+      });
+      afterLogin(data);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        // Lejárt ticketnél elölről kell kezdeni; rossz kódnál maradunk a lépcsőn.
+        if (err.message.includes("lejárt")) {
+          setTotpTicket(null);
+          setPassword("");
+          setError("A bejelentkezés lejárt, add meg újra a jelszavad.");
+        } else {
+          setError("Érvénytelen kód. Nézd meg újra a hitelesítő appban.");
+        }
+      } else if (err instanceof ApiError && err.status === 429) {
+        setError("Túl sok próbálkozás. Várj egy percet, és próbáld újra.");
+      } else {
+        setError("A szerver nem érhető el. Ellenőrizd, hogy a backend fut-e.");
+      }
+      setTotpCode("");
     } finally {
       setLoading(false);
     }
@@ -136,9 +182,59 @@ export default function LoginPage() {
               letterSpacing: "-0.02em",
             }}
           >
-            Bejelentkezés
+            {totpTicket ? "Kétlépcsős azonosítás" : "Bejelentkezés"}
           </h2>
 
+          {totpTicket ? (
+            <form onSubmit={handleTotpSubmit} noValidate style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div>
+                <label
+                  htmlFor="totp-code"
+                  style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--ink-2)", marginBottom: 6 }}
+                >
+                  Hitelesítő kód
+                </label>
+                <input
+                  id="totp-code"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  value={totpCode}
+                  onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  className="input"
+                  style={{ fontFamily: "monospace", letterSpacing: "0.35em", textAlign: "center", fontSize: 16 }}
+                  placeholder="123456"
+                  autoFocus
+                  required
+                  aria-describedby={error ? "login-error" : undefined}
+                />
+                <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 8, lineHeight: 1.5 }}>
+                  Írd be a hitelesítő appod (pl. Google Authenticator) 6 számjegyű kódját.
+                </p>
+                {error && (
+                  <p id="login-error" role="alert" style={{ marginTop: 8, fontSize: 12.5, color: "var(--err)" }}>
+                    {error}
+                  </p>
+                )}
+              </div>
+              <button
+                type="submit"
+                disabled={loading || totpCode.length !== 6}
+                className="btn btn-primary"
+                style={{ width: "100%", height: 38, fontSize: 14, marginTop: 4, justifyContent: "center" }}
+              >
+                {loading ? "Ellenőrzés..." : "Belépés"}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setTotpTicket(null); setTotpCode(""); setError(""); }}
+                className="btn btn-ghost btn-sm"
+                style={{ width: "100%", justifyContent: "center" }}
+              >
+                Vissza a jelszóhoz
+              </button>
+            </form>
+          ) : (
           <form onSubmit={handleSubmit} noValidate style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {/* Username */}
             <div>
@@ -253,8 +349,9 @@ export default function LoginPage() {
               )}
             </button>
           </form>
+          )}
 
-          {passkeySupported && (
+          {passkeySupported && !totpTicket && (
             <button
               type="button"
               onClick={handlePasskeyLogin}

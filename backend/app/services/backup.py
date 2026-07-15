@@ -55,6 +55,7 @@ class BackupService:
                     "display_name": u.display_name,
                     "role": u.role,
                     "password_hash": u.password_hash,  # hash — nem plaintext
+                    "totp_secret": u.totp_secret,
                 }
                 for u in users
             ],
@@ -205,6 +206,7 @@ class BackupService:
                     username=u.get("username"),
                     display_name=u.get("display_name", "Felhasználó"),
                     password_hash=u.get("password_hash"),
+                    totp_secret=u.get("totp_secret"),
                     role=u.get("role", "user"),
                 ))
             for c in data.get("conversations", []):

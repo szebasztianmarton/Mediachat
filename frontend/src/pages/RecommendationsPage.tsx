@@ -19,7 +19,7 @@ type Catalog = "watched" | "liked" | "continue";
 const CATALOGS: { key: Catalog; label: string; hint: string }[] = [
   { key: "liked", label: "Kedvelt alapján", hint: "A kedvelt tartalmaidhoz hasonló címek" },
   { key: "watched", label: "Hozzáadott alapján", hint: "A hozzáadott tartalmaidhoz hasonló címek" },
-  { key: "continue", label: "Folytatás", hint: "Sorozataid, amikből még hiányzik epizód" },
+  { key: "continue", label: "Folytatás", hint: "Ahol félbehagytad (Jellyfin), és sorozataid, amikből hiányzik epizód" },
 ];
 
 function RecCard({ item, onFeedback }: { item: RecItem; onFeedback: (item: RecItem, liked: boolean) => Promise<void> }) {
@@ -241,7 +241,7 @@ export default function RecommendationsPage() {
             <p className="text-sm font-medium text-gray-700">Még nincs ajánlás</p>
             <p className="text-xs text-gray-400 mt-1" style={{ maxWidth: 380, margin: "4px auto 0" }}>
               {catalog === "continue"
-                ? "Ha lesz olyan sorozatod, amiből hiányzik epizód, itt jelenik meg."
+                ? "Amint elkezdesz nézni valamit (Jellyfin), vagy lesz hiányzó epizódú sorozatod, itt jelenik meg."
                 : "Adj hozzá tartalmakat a chatben, vagy kedvelj ajánlásokat — ezekből tanulja meg a rendszer, mit érdemes ajánlani."}
             </p>
           </div>

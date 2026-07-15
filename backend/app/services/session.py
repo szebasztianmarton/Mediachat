@@ -51,6 +51,21 @@ def _as_aware(value: datetime | None) -> datetime | None:
 
 
 class SessionService:
+    async def verify_credentials(
+        self, db: AsyncSession, username: str, password: str
+    ) -> User | None:
+        """Felhasználónév+jelszó ellenőrzése SESSION KIADÁSA NÉLKÜL — a login
+        végpont ebből dönt, hogy azonnal tokent ad, vagy TOTP-kódot kér előbb."""
+        result = await db.execute(select(User).where(User.username == username.strip().lower()))
+        user = result.scalar_one_or_none()
+        if user is None or not user.password_hash:
+            # Konstans idejű viselkedéshez akkor is hash-elünk, ha nincs ilyen user.
+            verify_password(password, hash_password("dummy"))
+            return None
+        if not verify_password(password, user.password_hash):
+            return None
+        return user
+
     async def authenticate(
         self,
         db: AsyncSession,
@@ -60,19 +75,10 @@ class SessionService:
     ) -> tuple[User, UserSession, str] | None:
         """Siker esetén (user, session, plaintext_token) — a plaintext tokent CSAK
         itt adjuk ki egyszer, a DB-ben a hash-e tárolódik."""
-        result = await db.execute(select(User).where(User.username == username.strip().lower()))
-        user = result.scalar_one_or_none()
-        if user is None or not user.password_hash:
-            # Konstans idejű viselkedéshez akkor is hash-elünk, ha nincs ilyen user.
-            verify_password(password, hash_password("dummy"))
+        user = await self.verify_credentials(db, username, password)
+        if user is None:
             return None
-        if not verify_password(password, user.password_hash):
-            return None
-        plaintext = secrets.token_urlsafe(32)
-        session = UserSession(user_id=user.id, token=hash_token(plaintext), platform=platform)
-        db.add(session)
-        await db.commit()
-        await db.refresh(session)
+        session, plaintext = await self.create_session_for_user(db, user, platform)
         return user, session, plaintext
 
     async def create_session_for_user(

@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import AppShell from "../components/AppShell";
 import { api, ApiError } from "../utils/api";
 import { useToast } from "../components/Toast";
-import { HBarChart, UsageBar as UsageBarChart, fmtBytes } from "../components/Charts";
+import CollapsibleCard from "../components/CollapsibleCard";
+import { HBarChart, fmtBytes } from "../components/Charts";
 import { logger } from "../utils/logger";
 
 interface DiskInfo {
@@ -28,6 +29,9 @@ interface StorageAnalysis {
   disks: DiskInfo[];
   movies_total_bytes: number;
   series_total_bytes: number;
+  total_bytes?: number;
+  used_bytes?: number;
+  free_bytes?: number;
   sonarr_configured: boolean;
   radarr_configured: boolean;
 }
@@ -54,6 +58,23 @@ interface StaleItem {
   arr_id: number;
   last_activity: string | null;
   days_idle: number | null;
+  // Jellyfin nézettségi jelzés (ha van Jellyfin konfigurálva)
+  category?: "unwatched" | "stale_download";
+  watch_status?: "never_watched" | "not_watched_recently" | "no_data";
+  last_watched?: string | null;
+  watch_days_idle?: number | null;
+}
+
+function staleSubtitle(item: StaleItem): string {
+  if (item.watch_status === "never_watched") {
+    return "Letöltve, de még senki sem nézte meg";
+  }
+  if (item.watch_status === "not_watched_recently") {
+    return item.watch_days_idle !== null && item.watch_days_idle !== undefined
+      ? `${item.watch_days_idle} napja nem nézte senki`
+      : "Rég nem nézte senki";
+  }
+  return item.days_idle !== null ? `${item.days_idle} napja inaktív` : "Soha nem volt aktivitás";
 }
 
 interface CleanupResult {
@@ -75,16 +96,131 @@ const VOLUME_LABELS: Record<string, string> = {
   downloads: "Letöltések",
 };
 
+// A használat mértékéhez színt rendel: 95%+ piros, 85%+ borostyán, alatta semleges.
+function usageColor(pct: number): string {
+  if (pct >= 95) return "var(--err)";
+  if (pct >= 85) return "var(--warn)";
+  return "var(--ink)";
+}
+
 function UsageBar({ used, total }: { used: number; total: number }) {
   const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
   return (
     <div style={{ width: "100%" }}>
       <div style={{ height: 6, background: "var(--surface-2)", borderRadius: 3, overflow: "hidden", border: "1px solid var(--border-2)" }}>
-        <div style={{ height: "100%", width: `${pct}%`, background: pct > 90 ? "var(--warn)" : "var(--ink)" }} />
+        <div style={{ height: "100%", width: `${pct}%`, background: usageColor(pct) }} />
       </div>
       <p className="text-[10px] text-gray-400 mt-1">{pct}% használt</p>
     </div>
   );
+}
+
+// Azonos útvonalú lemezeket kiszűr (a Sonarr/Radarr néha ugyanazt a mountot
+// többször jelenti) — így az összesítés nem duplázódik, és a lista tisztább.
+function dedupDisks(disks: DiskInfo[]): DiskInfo[] {
+  const seen = new Set<string>();
+  const out: DiskInfo[] = [];
+  for (const d of disks) {
+    if (seen.has(d.path)) continue;
+    seen.add(d.path);
+    out.push(d);
+  }
+  return out;
+}
+
+// Áttekintő összesítő: a média-lemezek deduplikált összes/használt/szabad + a
+// film/sorozat/egyéb/szabad halmozott sáv — egy pillantással látható „mennyire tele".
+function StorageOverview({ analysis }: { analysis: StorageAnalysis }) {
+  const disks = dedupDisks(analysis.disks);
+  const total = disks.reduce((a, d) => a + d.total_bytes, 0);
+  const used = disks.reduce((a, d) => a + d.used_bytes, 0);
+  const free = disks.reduce((a, d) => a + d.free_bytes, 0);
+  if (total <= 0) return null;
+  const usedPct = Math.round((used / total) * 100);
+  const movies = analysis.movies_total_bytes;
+  const series = analysis.series_total_bytes;
+  const other = Math.max(0, used - movies - series);
+
+  const seg = (bytes: number, color: string, title: string) =>
+    bytes > 0 ? <div title={title} style={{ width: `${(bytes / total) * 100}%`, background: color, minWidth: 2 }} /> : null;
+  const legend = (color: string, label: string) => (
+    <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--ink-2)" }}>
+      <span style={{ width: 9, height: 9, borderRadius: 2, background: color, flexShrink: 0 }} /> {label}
+    </span>
+  );
+
+  return (
+    <div className="card p-5 mb-8">
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+        <div>
+          <span className="text-2xl font-bold text-gray-900">{fmtBytes(used)}</span>
+          <span className="text-sm text-gray-400"> / {fmtBytes(total)} használt ({usedPct}%)</span>
+        </div>
+        <span className="text-sm font-medium" style={{ color: usedPct >= 90 ? "var(--warn)" : "var(--ink-2)" }}>
+          {fmtBytes(free)} szabad
+        </span>
+      </div>
+      <div style={{ display: "flex", height: 14, borderRadius: 4, overflow: "hidden", border: "1px solid var(--border-2)" }}>
+        {seg(movies, "var(--primary-bg)", `Filmek: ${fmtBytes(movies)}`)}
+        {seg(series, "var(--warn)", `Sorozatok: ${fmtBytes(series)}`)}
+        {seg(other, "var(--ink-3)", "Egyéb használt")}
+        {seg(free, "var(--surface-3)", `Szabad: ${fmtBytes(free)}`)}
+      </div>
+      <div style={{ display: "flex", gap: 16, marginTop: 10, flexWrap: "wrap" }}>
+        {legend("var(--primary-bg)", `Filmek ${fmtBytes(movies)}`)}
+        {legend("var(--warn)", `Sorozatok ${fmtBytes(series)}`)}
+        {other > 0 && legend("var(--ink-3)", `Egyéb ${fmtBytes(other)}`)}
+        {legend("var(--surface-3)", `Szabad ${fmtBytes(free)}`)}
+      </div>
+    </div>
+  );
+}
+
+// Kompakt lemez-sor: útvonal + vékony sáv + szabad/össz + %. A CollapsibleCard listájában él.
+function DiskRow({ disk, first }: { disk: DiskInfo; first: boolean }) {
+  const pct = disk.total_bytes > 0 ? Math.min(100, Math.round((disk.used_bytes / disk.total_bytes) * 100)) : 0;
+  const color = usageColor(pct);
+  return (
+    <div style={{ padding: "11px 20px", borderTop: first ? "none" : "1px solid var(--border-2)" }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+        <span className="text-xs text-gray-700 truncate" style={{ fontFamily: "monospace" }} title={disk.path}>{disk.path}</span>
+        <span className="text-xs shrink-0" style={{ color: "var(--ink-2)" }}>
+          {fmtBytes(disk.free_bytes)} szabad · <span style={{ color, fontWeight: 600 }}>{pct}%</span>
+        </span>
+      </div>
+      <div style={{ height: 5, background: "var(--surface-2)", borderRadius: 3, overflow: "hidden", border: "1px solid var(--border-2)" }}>
+        <div style={{ height: "100%", width: `${pct}%`, background: color }} />
+      </div>
+      <p className="text-[10px] text-gray-400 mt-1">{fmtBytes(disk.used_bytes)} / {fmtBytes(disk.total_bytes)} használt</p>
+    </div>
+  );
+}
+
+// A UI adat-volume-jai (cache/média/letöltések) gyakran ugyanazon a fizikai
+// lemezen vannak → azonos méret/szabad jelzi. Ilyenkor egy kártyába vonjuk össze.
+interface VolGroup {
+  key: string;
+  labels: string[];
+  paths: string[];
+  total_gb: number;
+  used_gb: number;
+  free_gb: number;
+  exists: boolean;
+}
+function groupVolumes(vols: Volume[]): VolGroup[] {
+  const map = new Map<string, VolGroup>();
+  for (const v of vols) {
+    const key = v.exists ? `disk-${v.total_gb}|${v.free_gb}` : `missing-${v.path}`;
+    const label = VOLUME_LABELS[v.name] ?? v.name;
+    const g = map.get(key);
+    if (g) {
+      g.labels.push(label);
+      g.paths.push(v.path);
+    } else {
+      map.set(key, { key, labels: [label], paths: [v.path], total_gb: v.total_gb, used_gb: v.used_gb, free_gb: v.free_gb, exists: v.exists });
+    }
+  }
+  return [...map.values()];
 }
 
 export default function StoragePage() {
@@ -250,7 +386,13 @@ export default function StoragePage() {
           </div>
         )}
 
-        {/* Volumes */}
+        {/* Áttekintő összesítő — média könyvtár (egy pillantással) */}
+        {analysis && (analysis.radarr_configured || analysis.sonarr_configured) && (
+          <StorageOverview analysis={analysis} />
+        )}
+
+        {/* Adat-volume-ok — az azonos fizikai lemezen lévők egy kártyába vonva */}
+        <p className="section-label mb-3">Adatlemezek</p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
           {loading && [0, 1, 2].map((i) => (
             <div key={i} className="card" style={{ padding: 16 }}>
@@ -259,19 +401,23 @@ export default function StoragePage() {
               <div className="skeleton" style={{ height: 6, width: "100%" }} />
             </div>
           ))}
-          {!loading && status?.volumes.map((vol) => (
-            <div key={vol.name} className="card" style={{ padding: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-                <span className="text-sm font-semibold text-gray-900">{VOLUME_LABELS[vol.name] ?? vol.name}</span>
-                {!vol.exists && <span className="badge badge-gray">Nem elérhető</span>}
+          {!loading && status && groupVolumes(status.volumes).map((g) => (
+            <div key={g.key} className="card" style={{ padding: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
+                <span className="text-sm font-semibold text-gray-900 truncate">{g.labels.join(" · ")}</span>
+                {!g.exists && <span className="badge badge-gray shrink-0">Nem elérhető</span>}
               </div>
-              <p className="text-[11px] text-gray-400 mb-3 truncate" title={vol.path} style={{ fontFamily: "monospace" }}>{vol.path}</p>
-              {vol.exists ? (
+              <div className="mb-3">
+                {g.paths.map((p) => (
+                  <p key={p} className="text-[11px] text-gray-400 truncate" title={p} style={{ fontFamily: "monospace" }}>{p}</p>
+                ))}
+              </div>
+              {g.exists ? (
                 <>
                   <p className="text-xs text-gray-600 mb-2">
-                    <span className="font-semibold text-gray-900">{vol.free_gb} GB</span> szabad / {vol.total_gb} GB
+                    <span className="font-semibold text-gray-900">{g.free_gb} GB</span> szabad / {g.total_gb} GB
                   </p>
-                  <UsageBar used={vol.used_gb} total={vol.total_gb} />
+                  <UsageBar used={g.used_gb} total={g.total_gb} />
                 </>
               ) : (
                 <p className="text-xs text-gray-400">Az útvonal nem érhető el a szerveren.</p>
@@ -282,195 +428,218 @@ export default function StoragePage() {
 
         {/* Sonarr/Radarr könyvtár-tárhely */}
         {analysis && (analysis.radarr_configured || analysis.sonarr_configured) && (
-          <div className="mb-8">
-            <p className="section-label mb-3">Média könyvtár lemezei (Sonarr/Radarr)</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-              {analysis.disks.map((d) => (
-                <div key={d.path} className="card" style={{ padding: 14 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-                    <span className="text-xs text-gray-700 truncate" style={{ fontFamily: "monospace" }} title={d.path}>{d.path}</span>
-                    <span className="text-xs font-semibold text-gray-900 shrink-0">{fmtBytes(d.free_bytes)} szabad</span>
-                  </div>
-                  <UsageBarChart used={d.used_bytes} total={d.total_bytes} />
-                  <p className="text-[11px] text-gray-400 mt-1.5">{fmtBytes(d.used_bytes)} / {fmtBytes(d.total_bytes)} használt</p>
-                </div>
-              ))}
-            </div>
+          <div className="mb-8" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Média könyvtár lemezei — kompakt, telítettség szerint rendezett lista */}
+            <CollapsibleCard
+              title="Média könyvtár lemezei"
+              iconPath="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z"
+              storageKey="storage-disks"
+              count={dedupDisks(analysis.disks).length}
+              searchable
+              searchPlaceholder="Útvonal keresése…"
+              badge={<span className="badge badge-gray">Sonarr/Radarr</span>}
+            >
+              {(q) => {
+                const disks = dedupDisks(analysis.disks)
+                  .filter((d) => !q || d.path.toLowerCase().includes(q))
+                  .sort((a, b) => (b.total_bytes ? b.used_bytes / b.total_bytes : 0) - (a.total_bytes ? a.used_bytes / a.total_bytes : 0));
+                if (disks.length === 0) return <p className="text-sm text-gray-400 italic" style={{ padding: "16px 20px" }}>Nincs a szűrőnek megfelelő lemez.</p>;
+                return <div>{disks.map((d, i) => <DiskRow key={d.path} disk={d} first={i === 0} />)}</div>;
+              }}
+            </CollapsibleCard>
 
-            {/* Film vs sorozat összméret */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <div className="card p-4">
-                <p className="text-xs font-medium text-gray-500">Filmek összesen</p>
-                <p className="text-xl font-bold text-gray-900 mt-1">{fmtBytes(analysis.movies_total_bytes)}</p>
-              </div>
-              <div className="card p-4">
-                <p className="text-xs font-medium text-gray-500">Sorozatok összesen</p>
-                <p className="text-xl font-bold text-gray-900 mt-1">{fmtBytes(analysis.series_total_bytes)}</p>
-              </div>
-            </div>
-
-            {/* Top helyfoglaló sorozatok — évad-átlaggal */}
+            {/* Top helyfoglaló sorozatok — évad-átlaggal, szűrhető */}
             {analysis.top_series.length > 0 && (
-              <div className="card overflow-hidden mb-4">
-                <div className="card-header">
-                  <h2 className="text-sm font-semibold text-gray-900" style={{ letterSpacing: "-0.01em" }}>
-                    Legtöbb helyet foglaló sorozatok
-                  </h2>
-                  <span className="badge badge-gray">átlag / évad</span>
-                </div>
-                <div style={{ padding: "14px 20px" }}>
-                  <HBarChart
-                    barColor="var(--warn)"
-                    items={analysis.top_series.map((s) => ({
-                      label: s.title,
-                      value: s.size_bytes,
-                      valueLabel: fmtBytes(s.size_bytes),
-                      sublabel: `${s.seasons ?? 0} évad · átlag ${fmtBytes(s.avg_per_season_bytes ?? 0)}/évad`,
-                    }))}
-                  />
-                </div>
-              </div>
+              <CollapsibleCard
+                title="Legtöbb helyet foglaló sorozatok"
+                storageKey="storage-top-series"
+                searchable
+                searchPlaceholder="Sorozat keresése…"
+                badge={<span className="badge badge-gray">átlag / évad</span>}
+                bodyStyle={{ padding: "14px 20px" }}
+              >
+                {(q) => {
+                  const items = analysis.top_series.filter((s) => !q || s.title.toLowerCase().includes(q));
+                  if (items.length === 0) return <p className="text-sm text-gray-400 italic">Nincs találat.</p>;
+                  return (
+                    <HBarChart
+                      barColor="var(--warn)"
+                      items={items.map((s) => ({
+                        label: s.title,
+                        value: s.size_bytes,
+                        valueLabel: fmtBytes(s.size_bytes),
+                        sublabel: `${s.seasons ?? 0} évad · átlag ${fmtBytes(s.avg_per_season_bytes ?? 0)}/évad`,
+                      }))}
+                    />
+                  );
+                }}
+              </CollapsibleCard>
             )}
 
-            {/* Top helyfoglaló filmek — egy fájl, nincs évad-átlag */}
+            {/* Top helyfoglaló filmek — egy fájl, szűrhető */}
             {analysis.top_movies.length > 0 && (
-              <div className="card overflow-hidden">
-                <div className="card-header">
-                  <h2 className="text-sm font-semibold text-gray-900" style={{ letterSpacing: "-0.01em" }}>
-                    Legtöbb helyet foglaló filmek
-                  </h2>
-                </div>
-                <div style={{ padding: "14px 20px" }}>
-                  <HBarChart
-                    items={analysis.top_movies.map((m) => ({
-                      label: m.title,
-                      value: m.size_bytes,
-                      valueLabel: fmtBytes(m.size_bytes),
-                      sublabel: m.year ? String(m.year) : undefined,
-                    }))}
-                  />
-                </div>
-              </div>
+              <CollapsibleCard
+                title="Legtöbb helyet foglaló filmek"
+                storageKey="storage-top-movies"
+                searchable
+                searchPlaceholder="Film keresése…"
+                bodyStyle={{ padding: "14px 20px" }}
+              >
+                {(q) => {
+                  const items = analysis.top_movies.filter((m) => !q || m.title.toLowerCase().includes(q));
+                  if (items.length === 0) return <p className="text-sm text-gray-400 italic">Nincs találat.</p>;
+                  return (
+                    <HBarChart
+                      items={items.map((m) => ({
+                        label: m.title,
+                        value: m.size_bytes,
+                        valueLabel: fmtBytes(m.size_bytes),
+                        sublabel: m.year ? String(m.year) : undefined,
+                      }))}
+                    />
+                  );
+                }}
+              </CollapsibleCard>
             )}
           </div>
         )}
 
-        {/* Stale media */}
-        <div className="card overflow-hidden">
-          <div className="card-header">
-            <h2 className="text-sm font-semibold text-gray-900" style={{ letterSpacing: "-0.01em" }}>
-              Elavult tartalmak
-            </h2>
-            <span className="badge badge-gray">{staleDays}+ nap inaktív</span>
-          </div>
+        {/* Elavult tartalmak — összecsukható, szűrhető */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
+          <CollapsibleCard
+            title="Elavult tartalmak"
+            storageKey="storage-stale"
+            count={stale.length}
+            searchable={stale.length > 0}
+            searchPlaceholder="Cím keresése…"
+            chips={stale.length > 0 ? [{ key: "all", label: "Mind" }, { key: "movie", label: "Film" }, { key: "series", label: "Sorozat" }] : undefined}
+            badge={<span className="badge badge-gray">{staleDays}+ nap inaktív</span>}
+          >
+            {(q, chip) => (
+              <>
+                {actionMsg && (
+                  <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border-2)", background: "var(--surface-2)" }}>
+                    <p className="text-xs text-gray-700">{actionMsg}</p>
+                  </div>
+                )}
+                {staleLoading && (
+                  <div style={{ padding: "16px 20px" }}>
+                    {[0, 1, 2].map((i) => (
+                      <div key={i} className="skeleton" style={{ height: 14, width: `${80 - i * 15}%`, marginBottom: 10 }} />
+                    ))}
+                  </div>
+                )}
+                {!staleLoading && stale.length === 0 && (
+                  <div style={{ padding: "40px 20px", textAlign: "center" }}>
+                    <p className="text-sm text-gray-400">Nincs elavult tartalom</p>
+                    <p className="text-xs text-gray-400 mt-1">Minden médiádat használtad az elmúlt {staleDays} napban, vagy a Sonarr/Radarr nem érhető el.</p>
+                  </div>
+                )}
+                {!staleLoading && stale.length > 0 && (() => {
+                  const items = stale.filter((i) => (chip === "all" || i.media_type === chip) && (!q || i.title.toLowerCase().includes(q)));
+                  if (items.length === 0) return <p className="text-sm text-gray-400 italic" style={{ padding: "16px 20px" }}>Nincs a szűrőnek megfelelő tartalom.</p>;
+                  return items.map((item, idx) => (
+                    <div
+                      key={`${item.media_type}-${item.arr_id}`}
+                      style={{
+                        padding: "12px 20px",
+                        borderTop: idx > 0 ? "1px solid var(--border-2)" : "none",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span className="text-sm font-medium text-gray-900 truncate">{item.title}</span>
+                          <span className="badge badge-gray">{item.media_type === "movie" ? "Film" : "Sorozat"}</span>
+                          {item.watch_status === "never_watched" && <span className="badge badge-amber">Soha nem nézve</span>}
+                          {item.watch_status === "not_watched_recently" && <span className="badge badge-gray">Rég nézve</span>}
+                        </div>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          {staleSubtitle(item)}
+                        </p>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                        <button
+                          onClick={() => handleStaleAction(item, "unmonitor")}
+                          disabled={actionBusy === item.arr_id}
+                          className="btn btn-secondary btn-sm"
+                          title="A Sonarr/Radarr nem keres többé új letöltést hozzá"
+                        >
+                          Unmonitor
+                        </button>
+                        <button
+                          onClick={() => handleStaleAction(item, "delete")}
+                          disabled={actionBusy === item.arr_id}
+                          className={`btn btn-sm ${confirmDelete === item.arr_id ? "btn-danger" : "btn-secondary"}`}
+                        >
+                          {confirmDelete === item.arr_id ? "Biztos?" : "Törlés"}
+                        </button>
+                      </div>
+                    </div>
+                  ));
+                })()}
+              </>
+            )}
+          </CollapsibleCard>
 
-          {actionMsg && (
-            <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border-2)", background: "var(--surface-2)" }}>
-              <p className="text-xs text-gray-700">{actionMsg}</p>
-            </div>
-          )}
-
-          {staleLoading && (
-            <div style={{ padding: "16px 20px" }}>
-              {[0, 1, 2].map((i) => (
-                <div key={i} className="skeleton" style={{ height: 14, width: `${80 - i * 15}%`, marginBottom: 10 }} />
-              ))}
-            </div>
-          )}
-
-          {!staleLoading && stale.length === 0 && (
-            <div style={{ padding: "40px 20px", textAlign: "center" }}>
-              <p className="text-sm text-gray-400">Nincs elavult tartalom</p>
-              <p className="text-xs text-gray-400 mt-1">Minden médiádat használtad az elmúlt {staleDays} napban, vagy a Sonarr/Radarr nem érhető el.</p>
-            </div>
-          )}
-
-          {!staleLoading && stale.map((item, idx) => (
-            <div
-              key={`${item.media_type}-${item.arr_id}`}
-              style={{
-                padding: "12px 20px",
-                borderTop: idx > 0 ? "1px solid var(--border-2)" : "none",
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span className="text-sm font-medium text-gray-900 truncate">{item.title}</span>
-                  <span className="badge badge-gray">{item.media_type === "movie" ? "Film" : "Sorozat"}</span>
-                </div>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  {item.days_idle !== null ? `${item.days_idle} napja inaktív` : "Soha nem volt aktivitás"}
-                </p>
-              </div>
-              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                <button
-                  onClick={() => handleStaleAction(item, "unmonitor")}
-                  disabled={actionBusy === item.arr_id}
-                  className="btn btn-secondary btn-sm"
-                  title="A Sonarr/Radarr nem keres többé új letöltést hozzá"
-                >
-                  Unmonitor
-                </button>
-                <button
-                  onClick={() => handleStaleAction(item, "delete")}
-                  disabled={actionBusy === item.arr_id}
-                  className={`btn btn-sm ${confirmDelete === item.arr_id ? "btn-danger" : "btn-secondary"}`}
-                >
-                  {confirmDelete === item.arr_id ? "Biztos?" : "Törlés"}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Torrent takarítási napló */}
-        <div className="card overflow-hidden mt-8">
-          <div className="card-header">
-            <h2 className="text-sm font-semibold text-gray-900" style={{ letterSpacing: "-0.01em" }}>
-              Torrent takarítási napló
-            </h2>
-            <span className={autoDeleteHours > 0 ? "badge badge-green" : "badge badge-gray"}>
-              {autoDeleteHours > 0 ? `Auto-törlés: ${autoDeleteHours} óra` : "Auto-törlés kikapcsolva"}
-            </span>
-          </div>
-
-          {torrentLog.length === 0 ? (
-            <div style={{ padding: "32px 20px", textAlign: "center" }}>
-              <p className="text-sm text-gray-400">Még nincs törölt torrent</p>
-              <p className="text-xs text-gray-400 mt-1">
-                Az automatikus törlés a Beállítások → Torrent kliens szekcióban kapcsolható be (óra megadásával).
-              </p>
-            </div>
-          ) : (
-            <div>
-              {torrentLog.map((entry, idx) => (
-                <div
-                  key={entry.id}
-                  style={{
-                    padding: "10px 20px",
-                    borderTop: idx > 0 ? "1px solid var(--border-2)" : "none",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                  }}
-                >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <p className="text-sm text-gray-800 truncate" title={entry.name}>{entry.name}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      {entry.deleted_at ? new Date(entry.deleted_at).toLocaleString("hu-HU") : "—"}
-                      {entry.size_bytes > 0 && ` · ${(entry.size_bytes / 1_073_741_824).toFixed(2)} GB`}
+          {/* Torrent takarítási napló — összecsukható, szűrhető */}
+          <CollapsibleCard
+            title="Torrent takarítási napló"
+            storageKey="storage-torrentlog"
+            count={torrentLog.length}
+            searchable={torrentLog.length > 0}
+            searchPlaceholder="Név keresése…"
+            chips={torrentLog.length > 0 ? [{ key: "all", label: "Mind" }, { key: "auto", label: "Automatikus" }, { key: "manual", label: "Kézi" }] : undefined}
+            badge={
+              <span className={autoDeleteHours > 0 ? "badge badge-green" : "badge badge-gray"}>
+                {autoDeleteHours > 0 ? `Auto-törlés: ${autoDeleteHours} óra` : "Auto-törlés kikapcsolva"}
+              </span>
+            }
+          >
+            {(q, chip) => {
+              if (torrentLog.length === 0) {
+                return (
+                  <div style={{ padding: "32px 20px", textAlign: "center" }}>
+                    <p className="text-sm text-gray-400">Még nincs törölt torrent</p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Az automatikus törlés a Beállítások → Torrent kliens szekcióban kapcsolható be (óra megadásával).
                     </p>
                   </div>
-                  <span className={entry.mode === "auto" ? "badge badge-amber" : "badge badge-gray"}>
-                    {entry.mode === "auto" ? "Automatikus" : "Kézi"}
-                  </span>
+                );
+              }
+              const items = torrentLog.filter((e) => (chip === "all" || e.mode === chip) && (!q || e.name.toLowerCase().includes(q)));
+              if (items.length === 0) return <p className="text-sm text-gray-400 italic" style={{ padding: "16px 20px" }}>Nincs a szűrőnek megfelelő bejegyzés.</p>;
+              return (
+                <div>
+                  {items.map((entry, idx) => (
+                    <div
+                      key={entry.id}
+                      style={{
+                        padding: "10px 20px",
+                        borderTop: idx > 0 ? "1px solid var(--border-2)" : "none",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p className="text-sm text-gray-800 truncate" title={entry.name}>{entry.name}</p>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          {entry.deleted_at ? new Date(entry.deleted_at).toLocaleString("hu-HU") : "—"}
+                          {entry.size_bytes > 0 && ` · ${(entry.size_bytes / 1_073_741_824).toFixed(2)} GB`}
+                        </p>
+                      </div>
+                      <span className={entry.mode === "auto" ? "badge badge-amber" : "badge badge-gray"}>
+                        {entry.mode === "auto" ? "Automatikus" : "Kézi"}
+                      </span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
+              );
+            }}
+          </CollapsibleCard>
         </div>
 
         <p className="text-center text-xs text-gray-400 mt-6">

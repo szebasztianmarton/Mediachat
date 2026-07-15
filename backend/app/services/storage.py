@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 import time
@@ -6,8 +7,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.config import settings
+from app.services.jellyfin import JellyfinClient
 from app.services.radarr import RadarrClient
 from app.services.sonarr import SonarrClient
+
+logger = logging.getLogger(__name__)
 
 
 class StorageService:
@@ -45,12 +49,17 @@ class StorageService:
         freed_bytes = 0
 
         for file_path in cache_path.rglob("*"):
-            if not file_path.is_file():
+            try:
+                if not file_path.is_file():
+                    continue
+                stat = file_path.stat()
+                if stat.st_mtime < cutoff:
+                    file_path.unlink(missing_ok=True)
+                    freed_bytes += stat.st_size
+                    deleted_files += 1
+            except OSError:
+                # A fájl a listázás és a törlés között eltűnhetett — kihagyjuk.
                 continue
-            if file_path.stat().st_mtime < cutoff:
-                freed_bytes += file_path.stat().st_size
-                file_path.unlink(missing_ok=True)
-                deleted_files += 1
 
         return {
             "deleted_files": deleted_files,
@@ -59,55 +68,135 @@ class StorageService:
         }
 
     async def list_stale_media(self) -> list[dict[str, Any]]:
-        cutoff = datetime.now(UTC) - timedelta(days=settings.stale_media_days)
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(days=settings.stale_media_days)
+
+        # Ha van Jellyfin, a TÉNYLEGES nézettséget kérdezzük le (ki mit, mikor
+        # nézett) — ez pontosabb "elavult"-jelzés, mint a puszta letöltés-dátum.
+        jellyfin = JellyfinClient()
+        watched_map: dict[tuple[str, int], datetime] = {}
+        have_watch_data = jellyfin.configured
+        if have_watch_data:
+            try:
+                watched_map = await jellyfin.last_watched_map()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Jellyfin nézettség lekérés sikertelen: %s", exc)
+                have_watch_data = False
+
         stale: list[dict[str, Any]] = []
 
         if self.radarr.configured:
             movies = await self.radarr.list_movies()
             history = await self.radarr.get_history()
-            last_watched = self._latest_history(history, "movie")
+            last_download = self._latest_history(history, "movie")
             for movie in movies:
                 movie_id = movie.get("id")
                 if movie_id is None:
                     continue
-                title = movie.get("title") or "Ismeretlen film"
-                seen_at = last_watched.get(movie_id)
-                if seen_at is None or seen_at < cutoff:
-                    stale.append(
-                        {
-                            "title": title,
-                            "media_type": "movie",
-                            "external_id": movie.get("tmdbId") or 0,
-                            "arr_id": movie_id,
-                            "last_activity": seen_at.isoformat() if seen_at else None,
-                            "days_idle": (datetime.now(UTC) - seen_at).days if seen_at else None,
-                        }
-                    )
+                tmdb_id = movie.get("tmdbId")
+                item = self._evaluate_stale(
+                    title=movie.get("title") or "Ismeretlen film",
+                    media_type="movie",
+                    arr_id=movie_id,
+                    external_id=tmdb_id or 0,
+                    on_disk=bool(movie.get("hasFile")),
+                    last_download=last_download.get(movie_id),
+                    last_watched=watched_map.get(("movie", tmdb_id)) if tmdb_id else None,
+                    have_watch_data=have_watch_data,
+                    now=now,
+                    cutoff=cutoff,
+                )
+                if item:
+                    stale.append(item)
 
         if self.sonarr.configured:
             series_list = await self.sonarr.list_series()
             history = await self.sonarr.get_history()
-            last_watched = self._latest_history(history, "series")
+            last_download = self._latest_history(history, "series")
             for series in series_list:
                 series_id = series.get("id")
                 if series_id is None:
                     continue
-                title = series.get("title") or "Ismeretlen sorozat"
-                seen_at = last_watched.get(series_id)
-                if seen_at is None or seen_at < cutoff:
-                    stale.append(
-                        {
-                            "title": title,
-                            "media_type": "series",
-                            "external_id": series.get("tvdbId") or 0,
-                            "arr_id": series_id,
-                            "last_activity": seen_at.isoformat() if seen_at else None,
-                            "days_idle": (datetime.now(UTC) - seen_at).days if seen_at else None,
-                        }
-                    )
+                tvdb_id = series.get("tvdbId")
+                on_disk = int((series.get("statistics") or {}).get("episodeFileCount") or 0) > 0
+                item = self._evaluate_stale(
+                    title=series.get("title") or "Ismeretlen sorozat",
+                    media_type="series",
+                    arr_id=series_id,
+                    external_id=tvdb_id or 0,
+                    on_disk=on_disk,
+                    last_download=last_download.get(series_id),
+                    last_watched=watched_map.get(("series", tvdb_id)) if tvdb_id else None,
+                    have_watch_data=have_watch_data,
+                    now=now,
+                    cutoff=cutoff,
+                )
+                if item:
+                    stale.append(item)
 
-        stale.sort(key=lambda item: item.get("days_idle") or 9999, reverse=True)
+        # Előre a soha/rég nem nézett (unwatched) tételek, azon belül a
+        # leginkább elavult; utánuk a csak letöltés-dátum alapján elavultak.
+        def _sort_key(it: dict[str, Any]) -> tuple[int, int]:
+            if it["category"] == "unwatched":
+                idle = it["watch_days_idle"] if it["watch_days_idle"] is not None else 100_000
+            else:
+                idle = it["days_idle"] if it["days_idle"] is not None else 100_000
+            return (0 if it["category"] == "unwatched" else 1, -idle)
+
+        stale.sort(key=_sort_key)
         return stale
+
+    @staticmethod
+    def _evaluate_stale(
+        *,
+        title: str,
+        media_type: Literal["movie", "series"],
+        arr_id: int,
+        external_id: int,
+        on_disk: bool,
+        last_download: datetime | None,
+        last_watched: datetime | None,
+        have_watch_data: bool,
+        now: datetime,
+        cutoff: datetime,
+    ) -> dict[str, Any] | None:
+        """Eldönti, elavult-e egy tétel, és melyik kategóriába esik.
+
+        Jellyfinnel: a lemezen lévő, de rég (vagy soha) nem nézett tartalom
+        "unwatched" — de a frissen letöltötteket (download-dátum a cutoffon
+        belül) még nem soroljuk ide, hogy legyen idő megnézni őket.
+        Jellyfin nélkül a régi viselkedés marad: a rég nem mozgatott
+        (letöltött/importált) tétel "stale_download"."""
+        download_idle = (now - last_download).days if last_download else None
+        watch_idle = (now - last_watched).days if last_watched else None
+
+        if have_watch_data:
+            watched_recently = last_watched is not None and last_watched >= cutoff
+            recently_grabbed = last_download is not None and last_download >= cutoff
+            if not on_disk or watched_recently or recently_grabbed:
+                return None
+            watch_status = "never_watched" if last_watched is None else "not_watched_recently"
+            category = "unwatched"
+        else:
+            if last_download is not None and last_download >= cutoff:
+                return None
+            watch_status = "no_data"
+            category = "stale_download"
+
+        return {
+            "title": title,
+            "media_type": media_type,
+            "external_id": external_id,
+            "arr_id": arr_id,
+            # A UI eddig a letöltés-inaktivitást mutatta — kompatibilitásból marad.
+            "last_activity": last_download.isoformat() if last_download else None,
+            "days_idle": download_idle,
+            # Új: tényleges nézettségi jelzés (Jellyfinből)
+            "category": category,
+            "watch_status": watch_status,
+            "last_watched": last_watched.isoformat() if last_watched else None,
+            "watch_days_idle": watch_idle,
+        }
 
     async def apply_stale_action(
         self,

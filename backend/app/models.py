@@ -89,11 +89,25 @@ class UserInfo(BaseModel):
     display_name: str
     role: str = "user"
     created_at: str | None = None
+    totp_enabled: bool = False
 
 
 class LoginResponse(BaseModel):
-    token: str
-    user: UserInfo
+    # Sikeres bejelentkezésnél token+user; TOTP-s fióknál előbb totp_required
+    # + ticket jön, és a /api/auth/login/totp adja ki a tokent.
+    token: str | None = None
+    user: UserInfo | None = None
+    totp_required: bool = False
+    ticket: str | None = None
+
+
+class TotpLoginRequest(BaseModel):
+    ticket: str = Field(..., min_length=1, max_length=128)
+    code: str = Field(..., min_length=6, max_length=8)
+
+
+class TotpCodeRequest(BaseModel):
+    code: str = Field(..., min_length=6, max_length=8)
 
 
 class UserCreateRequest(BaseModel):

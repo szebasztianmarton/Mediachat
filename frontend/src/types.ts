@@ -18,6 +18,7 @@ export interface ApiUser {
   display_name: string;
   role: UserRole;
   created_at: string | null;
+  totp_enabled?: boolean;
 }
 
 // ── Service health ───────────────────────────────────────────────────────────
